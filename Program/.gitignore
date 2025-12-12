@@ -1,0 +1,14 @@
+# Database
+*.db
+mindrecall.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables (future proofing)
+.env
+.venv
+env/
+venv/
