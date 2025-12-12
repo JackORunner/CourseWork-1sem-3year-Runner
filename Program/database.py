@@ -3,7 +3,11 @@ import json
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
-DB_NAME = "mindrecall.db"
+import os
+
+# Ensure DB is created in the same directory as this script, not CWD
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "mindrecall.db")
 
 class Database:
     def __init__(self, db_name: str = DB_NAME):

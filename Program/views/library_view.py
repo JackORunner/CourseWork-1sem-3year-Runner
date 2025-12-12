@@ -97,8 +97,7 @@ class LibraryView(ft.Container):
 
     def open_add_dialog(self, e):
         self.add_dialog = AddMaterialDialog(self.page, self.on_material_added)
-        self.page.dialog = self.add_dialog
-        self.add_dialog.open = True
+        self.page.open(self.add_dialog)
         self.page.update()
 
     def on_material_added(self):
@@ -125,7 +124,7 @@ class AddMaterialDialog(ft.AlertDialog):
                 ft.Tab(text="Manual Paste", icon=ft.Icons.EDIT),
                 ft.Tab(text="AI Generate", icon=ft.Icons.AUTO_AWESOME),
             ],
-            expand=1,
+            expand=True,
             on_change=self.handle_tab_change
         )
 
@@ -224,7 +223,7 @@ class AddMaterialDialog(ft.AlertDialog):
                 self.topic_field.value,
                 self.content_field.value
             )
-            self.open = False
+            self.page.close(self)
             self.on_success()
         else:
             self.subject_field.error_text = "Required" if not self.subject_field.value else None
@@ -233,5 +232,5 @@ class AddMaterialDialog(ft.AlertDialog):
             self.page.update()
 
     def close(self, e):
-        self.open = False
+        self.page.close(self)
         self.page.update()
