@@ -225,6 +225,8 @@ class AddMaterialDialog(ft.AlertDialog):
             self.on_success()
         else:
             self.subject_field.error_text = "Required" if not self.subject_field.value else None
+            self.topic_field.error_text = "Required" if not self.topic_field.value else None
+            self.content_field.error_text = "Required" if not self.content_field.value else None
             self.page.update()
 
     def close(self, e):

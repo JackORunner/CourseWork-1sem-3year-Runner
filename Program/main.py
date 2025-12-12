@@ -132,4 +132,9 @@ def main(page: ft.Page):
     page.go("/library")
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    print("Starting MindRecall Application...")
+    try:
+        ft.app(target=main)
+    except Exception as e:
+        print(f"Error starting app: {e}")
+        input("Press Enter to exit...")
