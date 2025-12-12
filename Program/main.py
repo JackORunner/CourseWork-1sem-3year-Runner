@@ -74,8 +74,9 @@ def main(page: ft.Page):
                 param = query.split("=")[1]
                 my_content.content = StudyView(page, material_id=int(param))
                 # Hide Nav in Study mode? Or keep it? keeping it is safer for generic nav
-            except:
-                my_content.content = ft.Text("Invalid Study Session ID")
+            except Exception as e:
+                print(f"Error loading StudyView: {e}")
+                my_content.content = ft.Text(f"Error loading Study Session: {e}")
 
         # Responsive Layout
         # If width > 600, use Rail (Desktop). Else use Bar (Mobile).

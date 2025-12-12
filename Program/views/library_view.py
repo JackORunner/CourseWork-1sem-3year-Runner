@@ -188,7 +188,10 @@ class AddMaterialDialog(ft.AlertDialog):
 
     def generate_content(self, e):
         if not self.ai_subject_field.value or not self.ai_topic_field.value:
-            return # Show error?
+            self.ai_subject_field.error_text = "Required" if not self.ai_subject_field.value else None
+            self.ai_topic_field.error_text = "Required" if not self.ai_topic_field.value else None
+            self.page.update()
+            return
         
         self.ai_loading.visible = True
         self.page.update()

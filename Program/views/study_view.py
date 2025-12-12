@@ -107,7 +107,7 @@ class StudyView(ft.Container):
         self.page.go("/library")
 
     def render_loading(self):
-        self.content = ft.Center(ft.ProgressRing())
+        self.content = ft.Container(content=ft.ProgressRing(), alignment=ft.alignment.center)
         self.update()
 
     def render_step(self):
@@ -141,7 +141,7 @@ class StudyView(ft.Container):
                 ft.Container(
                     content=ft.Text(self.material['content'], size=16),
                     padding=20,
-                    bgcolor=ft.Colors.SURFACE_VARIANT,
+                    bgcolor=ft.Colors.GREY_900,
                     border_radius=10,
                     expand=True # Try to fill space
                 ),
@@ -202,5 +202,4 @@ class StudyView(ft.Container):
         self.content = ft.Column(controls, scroll=ft.ScrollMode.AUTO, expand=True)
         self.update()
 
-    def build(self):
-        return self.main_container
+

@@ -8,7 +8,7 @@ class AIEngine:
         self.api_key = api_key
         if api_key:
             genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash-lite")
+        self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
     def set_api_key(self, api_key: str):
         """Updates the API key at runtime."""
@@ -27,7 +27,7 @@ class AIEngine:
             f"Generate a concise but comprehensive educational text about '{topic}' within the subject of '{subject}'. "
             f"The text should be approximately 300 words, suitable for a student to read and then attempt to recall. "
             f"Focus on key facts, dates (if historical), and core concepts. "
-            f"Do not use markdown formatting like bolding or headers, just plain text paragraphs."
+            f"Do not use markdown formatting like bolding or headers, just plain text paragraphs. Generate the text in the same language as the topic."
         )
 
         try:
@@ -49,7 +49,7 @@ class AIEngine:
             f"Original Text:\n{original_text}\n\n"
             f"User Attempt:\n{user_attempt}\n\n"
             "Analyze the attempt for semantic accuracy. Do not penalize for minor wording differences if the meaning is preserved. "
-            "Identify missing key facts and any misinterpretations. Give output in the same language as the user attempt.\n"
+            "Identify missing key facts and any misinterpretations. Give the all output in the same language as the user attempt.\n"
             "Provide the output in STRICT JSON format with the following structure:\n"
             "{\n"
             '  "score": <integer between 0 and 100>,\n'
