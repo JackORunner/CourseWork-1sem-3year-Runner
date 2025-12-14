@@ -1,3 +1,78 @@
+import os
+import sys
+
+# Make sure the app's project folders are on sys.path inside the APK runtime
+_current_dir = os.path.abspath(os.path.dirname(__file__))
+_parent_dir = os.path.abspath(os.path.join(_current_dir, ".."))
+for p in (_current_dir, _parent_dir):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# Debug output (appears in adb logcat). Remove after debugging.
+try:
+    print("DEBUG: main __file__=", __file__)
+    print("DEBUG: sys.path=", sys.path)
+    print("DEBUG: files in current_dir=", os.listdir(_current_dir))
+    print("DEBUG: views exists=", os.path.isdir(os.path.join(_current_dir, "views")))
+except Exception as _e:
+    print("DEBUG: error printing debug info:", _e)
+
+# Normalize Windows-style bundled filenames (e.g. 'views\\file.py')
+# Some packagers store files with backslashes in the filename instead of
+# creating real directories. Detect those and move them into a proper
+# `views/` directory so imports like `from views.library_view import ...`
+# work inside the APK runtime.
+try:
+    _moved_any = False
+    for fn in os.listdir(_current_dir):
+        if fn.startswith("views\\") or fn.startswith("views/"):
+            # split on whichever separator is present in the filename
+            if "\\" in fn:
+                parts = fn.split("\\", 1)
+            else:
+                parts = fn.split("/", 1)
+            subpath = parts[1] if len(parts) > 1 else parts[0]
+            dest_dir = os.path.join(_current_dir, "views")
+            os.makedirs(dest_dir, exist_ok=True)
+            src = os.path.join(_current_dir, fn)
+            dest = os.path.join(dest_dir, subpath)
+            try:
+                if not os.path.exists(dest):
+                    os.rename(src, dest)
+                _moved_any = True
+            except Exception:
+                try:
+                    # fallback: copy then remove
+                    with open(src, "rb") as r, open(dest, "wb") as w:
+                        w.write(r.read())
+                    os.remove(src)
+                    _moved_any = True
+                except Exception:
+                    pass
+
+    # fix incorrectly named init file (init.py -> __init__.py)
+    init_wrong = os.path.join(_current_dir, "views", "init.py")
+    init_right = os.path.join(_current_dir, "views", "__init__.py")
+    if os.path.exists(init_wrong) and not os.path.exists(init_right):
+        try:
+            os.rename(init_wrong, init_right)
+            _moved_any = True
+        except Exception:
+            try:
+                with open(init_wrong, "rb") as r, open(init_right, "wb") as w:
+                    w.write(r.read())
+                os.remove(init_wrong)
+                _moved_any = True
+            except Exception:
+                pass
+
+    if _moved_any:
+        try:
+            print("DEBUG: normalized bundled view files into real views/ dir")
+        except Exception:
+            pass
+except Exception as _e:
+    print("DEBUG: error normalizing bundled paths:", _e)
 import flet as ft
 from views.library_view import LibraryView
 from views.settings_view import SettingsView

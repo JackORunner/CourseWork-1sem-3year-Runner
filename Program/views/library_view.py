@@ -42,7 +42,7 @@ class LibraryView(ft.Container):
 
     def check_api_key(self):
         key = self.page.client_storage.get("google_api_key")
-        if key:
+        if key and hasattr(self.ai, "set_api_key"):
             self.ai.set_api_key(key)
 
     def did_mount(self):
@@ -198,7 +198,8 @@ class AddMaterialDialog(ft.AlertDialog):
         try:
             # Refresh key just in case
             key = self.page.client_storage.get("google_api_key")
-            self.ai.set_api_key(key)
+            if hasattr(self.ai, "set_api_key"):
+                self.ai.set_api_key(key)
             
             text = self.ai.generate_lesson(self.ai_subject_field.value, self.ai_topic_field.value)
             

@@ -1,0 +1,2 @@
+D:/CourseWork3/CourseWork-1sem-3year-Runner/Program/build/flutter/android/app/.cxx/RelWithDebInfo/3z413w5c/x86_64/CMakeFiles/edit_cache.dir
+D:/CourseWork3/CourseWork-1sem-3year-Runner/Program/build/flutter/android/app/.cxx/RelWithDebInfo/3z413w5c/x86_64/CMakeFiles/rebuild_cache.dir
