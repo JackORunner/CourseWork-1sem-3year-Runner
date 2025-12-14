@@ -63,6 +63,21 @@ class Database:
         conn.close()
         return material_id
 
+    def update_material(self, material_id: int, subject: str, topic_name: str, content: str) -> None:
+        """Updates an existing study material."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE materials
+            SET subject = ?, topic_name = ?, content = ?
+            WHERE id = ?
+            """,
+            (subject, topic_name, content, material_id),
+        )
+        conn.commit()
+        conn.close()
+
     def get_materials(self, subject_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves materials, optionally filtered by subject."""
         conn = self.get_connection()

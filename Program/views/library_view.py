@@ -96,25 +96,57 @@ class LibraryView(ft.Container):
             for mat in materials:
                 self.materials_list.controls.append(
                     ft.Card(
+                        expand=True,
                         content=ft.Container(
                             padding=10,
-                            content=ft.Column(
-                                [
-                                    ft.ListTile(
-                                        leading=ft.Icon(ft.Icons.BOOK),
-                                        title=ft.Text(mat["topic_name"], weight=ft.FontWeight.BOLD),
-                                        subtitle=ft.Text(
-                                            f"{mat['subject']} • {len(mat['content'].split())} words"
-                                        ),
-                                        trailing=ft.IconButton(
-                                            icon=ft.Icons.PLAY_ARROW,
-                                            tooltip="Start Study Session",
-                                            on_click=lambda e, m=mat: self.start_study(m),
-                                        ),
-                                    )
-                                ]
+                            expand=True,
+                            content=ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Row(
+                                        spacing=10,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        controls=[
+                                            ft.Icon(ft.Icons.BOOK),
+                                            ft.Column(
+                                                spacing=2,
+                                                expand=True,
+                                                controls=[
+                                                    ft.Text(mat["topic_name"], weight=ft.FontWeight.BOLD),
+                                                    ft.Text(
+                                                        f"{mat['subject']} • {len(mat['content'].split())} words",
+                                                        color=ft.Colors.GREY_600,
+                                                        size=12,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                    ft.Row(
+                                        spacing=4,
+                                        alignment=ft.MainAxisAlignment.END,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        controls=[
+                                            ft.IconButton(
+                                                icon=ft.Icons.EDIT,
+                                                tooltip="Edit",
+                                                icon_size=20,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.open_edit_dialog(m),
+                                            ),
+                                            ft.IconButton(
+                                                icon=ft.Icons.PLAY_ARROW,
+                                                tooltip="Start Study Session",
+                                                icon_size=22,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.start_study(m),
+                                            ),
+                                        ],
+                                    ),
+                                ],
                             ),
-                        )
+                        ),
                     )
                 )
         self.update()
@@ -128,6 +160,11 @@ class LibraryView(ft.Container):
     def start_study(self, material):
         self.pg.go(f"/study?id={material['id']}")
 
+    def open_edit_dialog(self, material):
+        self.edit_dialog = AddMaterialDialog(self.pg, self.on_material_updated, material)
+        self.pg.open(self.edit_dialog)
+        self.pg.update()
+
     def open_add_dialog(self, e):
         self.add_dialog = AddMaterialDialog(self.pg, self.on_material_added)
         self.pg.open(self.add_dialog)
@@ -140,14 +177,23 @@ class LibraryView(ft.Container):
         self.pg.snack_bar.open = True  # type: ignore[attr-defined]
         self.pg.update()
 
+    def on_material_updated(self):
+        self.load_materials()
+        self.load_subjects()
+        self.pg.snack_bar = ft.SnackBar(ft.Text("Material updated."))  # type: ignore[attr-defined]
+        self.pg.snack_bar.open = True  # type: ignore[attr-defined]
+        self.pg.update()
+
 
 class AddMaterialDialog(ft.AlertDialog):
-    def __init__(self, page: ft.Page, on_success):
+    def __init__(self, page: ft.Page, on_success, material=None):
         super().__init__()
         self.pg: ft.Page = page
         self.on_success = on_success
         self.db = Database()
         self.ai = AIEngine(api_key=self.pg.client_storage.get("google_api_key"))
+        self.material = material
+        self.is_edit = material is not None
 
         self.tabs = ft.Tabs(
             selected_index=0,
@@ -169,6 +215,12 @@ class AddMaterialDialog(ft.AlertDialog):
             max_lines=10,
             expand=True,
         )
+
+        # Pre-fill for edit mode
+        if self.is_edit:
+            self.subject_field.value = self.material.get("subject", "")
+            self.topic_field.value = self.material.get("topic_name", "")
+            self.content_field.value = self.material.get("content", "")
 
         self.ai_subject_field = ft.TextField(label="Subject")
         self.ai_topic_field = ft.TextField(label="Topic")
@@ -208,9 +260,10 @@ class AddMaterialDialog(ft.AlertDialog):
             ),
         )
 
+        action_label = "Update" if self.is_edit else "Save"
         self.actions = [
             ft.TextButton("Cancel", on_click=self.close),
-            ft.ElevatedButton("Save", on_click=self.save),
+            ft.ElevatedButton(action_label, on_click=self.save),
         ]
         self.actions_alignment = ft.MainAxisAlignment.END
 
@@ -256,11 +309,19 @@ class AddMaterialDialog(ft.AlertDialog):
 
     def save(self, e):
         if self.subject_field.value and self.topic_field.value and self.content_field.value:
-            self.db.add_material(
-                self.subject_field.value,
-                self.topic_field.value,
-                self.content_field.value,
-            )
+            if self.is_edit and self.material:
+                self.db.update_material(
+                    self.material.get("id"),
+                    self.subject_field.value,
+                    self.topic_field.value,
+                    self.content_field.value,
+                )
+            else:
+                self.db.add_material(
+                    self.subject_field.value,
+                    self.topic_field.value,
+                    self.content_field.value,
+                )
             self.pg.close(self)
             self.on_success()
         else:
