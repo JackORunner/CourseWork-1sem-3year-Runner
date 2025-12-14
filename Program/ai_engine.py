@@ -23,8 +23,9 @@ class AIEngine:
         self.api_key: Optional[str] = api_key or os.getenv("GOOGLE_API_KEY")
         # SDK-style vs REST-style model names
         self.sdk_model: str = (model or "gemini-2.5-flash-lite")
-        self.rest_model: str = (model or "models/text-bison-001")
-        self.base = "https://generativelanguage.googleapis.com/v1"
+        # REST defaults to a Gemini model to avoid 404s on deprecated PaLM endpoints
+        self.rest_model: str = (model or "models/gemini-2.5-flash-lite")
+        self.base = "https://generativelanguage.googleapis.com"
 
         self._sdk_model: Optional[Any] = None
         if _HAS_SDK and self.api_key:
@@ -57,20 +58,31 @@ class AIEngine:
     def _rest_call(self, prompt: str, max_tokens: int = 512, temperature: float = 0.2) -> str:
         if not self.api_key:
             raise ValueError("API Key is missing. Set GOOGLE_API_KEY or pass api_key to AIEngine.")
-
-        url = f"{self.base}/{self.rest_model}:generateText?key={self.api_key}"
+        # Gemini REST uses generateContent on v1beta; fall back to v1 for legacy models if needed.
+        version = "v1beta" if "gemini" in self.rest_model else "v1"
+        url = f"{self.base}/{version}/{self.rest_model}:generateContent?key={self.api_key}"
         payload = {
-            "prompt": {"text": prompt},
-            "temperature": temperature,
-            "maxOutputTokens": max_tokens,
+            "contents": [
+                {
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            },
         }
 
         resp = requests.post(url, json=payload, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+
+        # Extract the first candidate text if present.
         candidates = data.get("candidates") or []
         if candidates:
-            return candidates[0].get("output") or candidates[0].get("text") or ""
+            parts = candidates[0].get("content", {}).get("parts") or []
+            if parts and isinstance(parts[0], dict):
+                return parts[0].get("text", "") or parts[0].get("content", "") or ""
         return data.get("output", "") or data.get("text", "")
 
     def _sdk_call(self, prompt: str):

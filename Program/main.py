@@ -71,7 +71,12 @@ from views.study_view import StudyView
 
 def main(page: ft.Page):
     page.title = "MindRecall"
-    page.theme_mode = ft.ThemeMode.DARK
+    # Load theme preference
+    saved_theme = page.client_storage.get("theme_mode")
+    if saved_theme == "light":
+        page.theme_mode = ft.ThemeMode.LIGHT
+    else:
+        page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0
     
     # State for simple routing
