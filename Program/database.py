@@ -78,6 +78,14 @@ class Database:
         conn.commit()
         conn.close()
 
+    def delete_material(self, material_id: int) -> None:
+        """Deletes a material by its ID."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+        conn.commit()
+        conn.close()
+
     def get_materials(self, subject_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieves materials, optionally filtered by subject."""
         conn = self.get_connection()

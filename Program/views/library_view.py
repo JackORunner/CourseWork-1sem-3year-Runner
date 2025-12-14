@@ -12,6 +12,8 @@ class LibraryView(ft.Container):
         self.pg: ft.Page = page
         self.db = Database()
         self.ai = AIEngine()
+        self._delete_dialog: ft.AlertDialog | None = None
+        self._pending_delete_id: int | None = None
 
         self.materials_list = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
         
@@ -142,6 +144,13 @@ class LibraryView(ft.Container):
                                                 style=ft.ButtonStyle(padding=0),
                                                 on_click=lambda e, m=mat: self.start_study(m),
                                             ),
+                                            ft.IconButton(
+                                                icon=ft.Icons.DELETE,
+                                                tooltip="Delete",
+                                                icon_size=22,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.open_delete_dialog(m),
+                                            ),
                                         ],
                                     ),
                                 ],
@@ -170,6 +179,41 @@ class LibraryView(ft.Container):
         self.pg.open(self.add_dialog)
         self.pg.update()
 
+    def open_delete_dialog(self, material):
+        self._pending_delete_id = material.get("id")
+        self._delete_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Delete material"),
+            content=ft.Text(f"Delete \"{material.get('topic_name')}\"? This cannot be undone."),
+            actions=[
+                ft.TextButton("Cancel", on_click=self._cancel_delete),
+                ft.ElevatedButton(
+                    "Delete",
+                    bgcolor=ft.Colors.RED,
+                    on_click=self.confirm_delete
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.pg.open(self._delete_dialog)
+        self.pg.update()
+
+    def _cancel_delete(self, e):
+        if self._delete_dialog:
+            self.pg.close(self._delete_dialog)
+            self._delete_dialog = None
+        self._pending_delete_id = None
+        self.pg.update()
+
+    def confirm_delete(self, e):
+        if self._pending_delete_id is not None:
+            self.db.delete_material(self._pending_delete_id)
+        if self._delete_dialog:
+            self.pg.close(self._delete_dialog)
+            self._delete_dialog = None
+        self._pending_delete_id = None
+        self.on_material_deleted()
+
     def on_material_added(self):
         self.load_materials()
         self.load_subjects()
@@ -181,6 +225,13 @@ class LibraryView(ft.Container):
         self.load_materials()
         self.load_subjects()
         self.pg.snack_bar = ft.SnackBar(ft.Text("Material updated."))  # type: ignore[attr-defined]
+        self.pg.snack_bar.open = True  # type: ignore[attr-defined]
+        self.pg.update()
+
+    def on_material_deleted(self):
+        self.load_materials()
+        self.load_subjects()
+        self.pg.snack_bar = ft.SnackBar(ft.Text("Material deleted."))  # type: ignore[attr-defined]
         self.pg.snack_bar.open = True  # type: ignore[attr-defined]
         self.pg.update()
 
