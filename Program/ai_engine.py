@@ -1,13 +1,13 @@
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Try to import Google SDK; fall back to REST when not available
 try:
-    import google.generativeai as genai  # type: ignore
-    _HAS_SDK = True
+    import google.generativeai as genai  # type: ignore[import-not-found]
+    _HAS_SDK: bool = True
 except Exception:
-    genai = None
+    genai: Any = None
     _HAS_SDK = False
 
 import requests
@@ -19,18 +19,23 @@ class AIEngine:
     Works on desktop and Android.
     """
 
-    def __init__(self, api_key: str = None, model: str = None):
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key: Optional[str] = api_key or os.getenv("GOOGLE_API_KEY")
         # SDK-style vs REST-style model names
-        self.sdk_model = model or "gemini-2.5-flash-lite"
-        self.rest_model = model or "models/text-bison-001"
+        self.sdk_model: str = (model or "gemini-2.5-flash-lite")
+        self.rest_model: str = (model or "models/text-bison-001")
         self.base = "https://generativelanguage.googleapis.com/v1"
 
-        self._sdk_model = None
+        self._sdk_model: Optional[Any] = None
         if _HAS_SDK and self.api_key:
             try:
-                genai.configure(api_key=self.api_key)
-                self._sdk_model = genai.GenerativeModel(self.sdk_model)
+                # Use getattr to avoid Pylance private export errors.
+                configure = getattr(genai, "configure", None)
+                generative_model_cls = getattr(genai, "GenerativeModel", None)
+                if callable(configure):
+                    configure(api_key=self.api_key)  # type: ignore[misc]
+                if generative_model_cls is not None:
+                    self._sdk_model = generative_model_cls(self.sdk_model)  # type: ignore[call-arg]
             except Exception:
                 self._sdk_model = None
 
@@ -39,8 +44,12 @@ class AIEngine:
         self.api_key = api_key
         if _HAS_SDK and genai:
             try:
-                genai.configure(api_key=api_key)
-                self._sdk_model = genai.GenerativeModel(self.sdk_model)
+                configure = getattr(genai, "configure", None)
+                generative_model_cls = getattr(genai, "GenerativeModel", None)
+                if callable(configure):
+                    configure(api_key=api_key)  # type: ignore[misc]
+                if generative_model_cls is not None:
+                    self._sdk_model = generative_model_cls(self.sdk_model)  # type: ignore[call-arg]
             except Exception:
                 self._sdk_model = None
 

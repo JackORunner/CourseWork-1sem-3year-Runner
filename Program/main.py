@@ -167,7 +167,7 @@ def main(page: ft.Page):
         # Let's use the View's built-in properties for simple responsive nav triggers?
         # Actually Flet Views work best with AppBar/NavDrawer/NavBar params.
         
-        if page.width > 600:
+        if (page.width or 0) > 600:
              # Desktop Layout
              page.views.append(
                 ft.View(
@@ -199,7 +199,10 @@ def main(page: ft.Page):
     def view_pop(view):
         page.views.pop()
         top_view = page.views[-1]
-        page.go(top_view.route)
+        try:
+            page.go(top_view.route or "/library")
+        except Exception:
+            page.go("/library")
 
     page.on_route_change = route_change
     page.on_view_pop = view_pop
