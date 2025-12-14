@@ -109,17 +109,31 @@ class LibraryView(ft.Container):
                                     ft.Row(
                                         spacing=10,
                                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        expand=True,
                                         controls=[
                                             ft.Icon(ft.Icons.BOOK),
                                             ft.Column(
                                                 spacing=2,
                                                 expand=True,
                                                 controls=[
-                                                    ft.Text(mat["topic_name"], weight=ft.FontWeight.BOLD),
-                                                    ft.Text(
-                                                        f"{mat['subject']} • {len(mat['content'].split())} words",
-                                                        color=ft.Colors.GREY_600,
-                                                        size=12,
+                                                    ft.Container(
+                                                        expand=True,
+                                                        content=ft.Text(
+                                                            mat["topic_name"],
+                                                            weight=ft.FontWeight.BOLD,
+                                                            overflow=ft.TextOverflow.ELLIPSIS,
+                                                            max_lines=1,
+                                                        ),
+                                                    ),
+                                                    ft.Container(
+                                                        expand=True,
+                                                        content=ft.Text(
+                                                            f"{mat['subject']} • {len(mat['content'].split())} words",
+                                                            color=ft.Colors.GREY_600,
+                                                            size=12,
+                                                            overflow=ft.TextOverflow.ELLIPSIS,
+                                                            max_lines=1,
+                                                        ),
                                                     ),
                                                 ],
                                             ),
