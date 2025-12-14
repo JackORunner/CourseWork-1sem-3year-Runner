@@ -110,6 +110,14 @@ class StudyView(ft.Container):
         self.content = ft.Container(content=ft.ProgressRing(), alignment=ft.alignment.center)
         self.update()
 
+    def set_mode_standard(self, e):
+        self.mode = "Standard"
+        self.go_to_read(e)
+
+    def set_mode_mastery(self, e):
+        self.mode = "Mastery"
+        self.go_to_read(e)
+
     def render_step(self):
         if self.error_view:
             self.content = ft.Text("Material not found.")
@@ -126,8 +134,8 @@ class StudyView(ft.Container):
                 ft.Divider(),
                 ft.Text("Select Mode:"),
                 ft.Row([
-                    ft.ElevatedButton("Standard Mode", data="Standard", on_click=lambda e: [setattr(self, 'mode', 'Standard'), self.go_to_read(e)]), 
-                    ft.ElevatedButton("Mastery Mode", data="Mastery", on_click=lambda e: [setattr(self, 'mode', 'Mastery'), self.go_to_read(e)])
+                    ft.ElevatedButton("Standard Mode", on_click=self.set_mode_standard), 
+                    ft.ElevatedButton("Mastery Mode", on_click=self.set_mode_mastery)
                 ]),
                 ft.Text("Standard: Get feedback and save.", size=12, italic=True),
                 ft.Text("Mastery: Must score > 80% to pass.", size=12, italic=True),
@@ -135,13 +143,17 @@ class StudyView(ft.Container):
 
         # STEP 2: READING
         elif self.step == 2:
+            # Determine background color based on theme
+            bg_color = ft.Colors.GREY_200 if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_900
+            text_color = ft.Colors.BLACK if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.WHITE
+            
             controls = [
                 ft.Text("Read and Memorize", size=20, weight="bold"),
                 ft.Divider(),
                 ft.Container(
-                    content=ft.Text(self.material['content'], size=16),
+                    content=ft.Text(self.material['content'], size=16, color=text_color),
                     padding=20,
-                    bgcolor=ft.Colors.GREY_900,
+                    bgcolor=bg_color,
                     border_radius=10,
                     expand=True # Try to fill space
                 ),
