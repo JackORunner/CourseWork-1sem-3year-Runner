@@ -8,15 +8,6 @@ for p in (_current_dir, _parent_dir):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Debug output (appears in adb logcat). Remove after debugging.
-try:
-    print("DEBUG: main __file__=", __file__)
-    print("DEBUG: sys.path=", sys.path)
-    print("DEBUG: files in current_dir=", os.listdir(_current_dir))
-    print("DEBUG: views exists=", os.path.isdir(os.path.join(_current_dir, "views")))
-except Exception as _e:
-    print("DEBUG: error printing debug info:", _e)
-
 # Normalize Windows-style bundled filenames (e.g. 'views\\file.py')
 # Some packagers store files with backslashes in the filename instead of
 # creating real directories. Detect those and move them into a proper
