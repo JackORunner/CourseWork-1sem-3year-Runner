@@ -10,6 +10,12 @@ class SettingsView(ft.Column):
             can_reveal_password=True,
             width=400
         )
+        
+        self.theme_switch = ft.Switch(
+            label="Light Mode",
+            on_change=self.toggle_theme
+        )
+
         self.controls = [
             ft.Container(
                 padding=20,
@@ -17,8 +23,12 @@ class SettingsView(ft.Column):
                     controls=[
                         ft.Text("Settings", size=30, weight=ft.FontWeight.BOLD),
                         ft.Divider(),
+                        ft.Text("Appearance", size=20, weight=ft.FontWeight.BOLD),
+                        self.theme_switch,
+                        ft.Divider(),
+                        ft.Text("AI Configuration", size=20, weight=ft.FontWeight.BOLD),
                         ft.Text("Configure your AI settings below.", size=16),
-                        ft.Container(height=20),
+                        ft.Container(height=10),
                         self.api_key_field,
                         ft.ElevatedButton(
                             text="Save API Key",
@@ -42,7 +52,21 @@ class SettingsView(ft.Column):
         saved_key = self.page.client_storage.get("google_api_key")
         if saved_key:
             self.api_key_field.value = saved_key
-            self.update()
+        
+        # Load theme state
+        current_theme = self.page.client_storage.get("theme_mode")
+        self.theme_switch.value = (current_theme == "light")
+        
+        self.update()
+
+    def toggle_theme(self, e):
+        if self.theme_switch.value:
+            self.page.theme_mode = ft.ThemeMode.LIGHT
+            self.page.client_storage.set("theme_mode", "light")
+        else:
+            self.page.theme_mode = ft.ThemeMode.DARK
+            self.page.client_storage.set("theme_mode", "dark")
+        self.page.update()
 
     def save_api_key(self, e):
         if self.api_key_field.value:

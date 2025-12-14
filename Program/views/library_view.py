@@ -14,10 +14,19 @@ class LibraryView(ft.Container):
         self.ai = AIEngine()
 
         self.materials_list = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+        
+        self.search_field = ft.TextField(
+            label="Search topics...",
+            prefix_icon=ft.Icons.SEARCH,
+            expand=True,
+            on_change=self.filter_materials
+        )
+        
         self.subject_filter = ft.Dropdown(
             label="Filter by Subject",
             options=[ft.dropdown.Option("All")],
             value="All",
+            width=200,
             on_change=self.filter_materials,
         )
 
@@ -35,7 +44,12 @@ class LibraryView(ft.Container):
                     ],
                 ),
                 ft.Divider(),
-                self.subject_filter,
+                ft.Row(
+                    controls=[
+                        self.search_field,
+                        self.subject_filter,
+                    ]
+                ),
                 ft.Container(height=10),
                 self.materials_list,
             ],
@@ -58,14 +72,25 @@ class LibraryView(ft.Container):
         self.subject_filter.options = options
         self.update()
 
-    def load_materials(self, subject=None):
+    def load_materials(self, subject=None, search_query=""):
         self.materials_list.controls.clear()
+        
+        # Get all materials first (or filter by subject if DB supports it efficiently)
+        # Since DB.get_materials handles subject filtering:
         filter_subj = subject if subject != "All" else None
         materials = self.db.get_materials(filter_subj)
 
+        # Apply search filter in memory
+        if search_query:
+            query = search_query.lower()
+            materials = [
+                m for m in materials 
+                if query in m["topic_name"].lower() or query in m["content"].lower()
+            ]
+
         if not materials:
             self.materials_list.controls.append(
-                ft.Text("No materials found. Add some to get started!", italic=True)
+                ft.Text("No materials found.", italic=True)
             )
         else:
             for mat in materials:
@@ -95,7 +120,10 @@ class LibraryView(ft.Container):
         self.update()
 
     def filter_materials(self, e):
-        self.load_materials(self.subject_filter.value)
+        self.load_materials(
+            subject=self.subject_filter.value,
+            search_query=self.search_field.value
+        )
 
     def start_study(self, material):
         self.pg.go(f"/study?id={material['id']}")
