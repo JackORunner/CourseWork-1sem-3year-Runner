@@ -2,6 +2,9 @@
 *.db
 mindrecall.db
 
+# apk
+*.apk
+
 # Python
 __pycache__/
 *.py[cod]
