@@ -106,6 +106,10 @@ class StudyView(ft.Container):
     def finish_session(self, e):
         self.page.go("/library")
 
+    def go_back(self, e):
+        """Return to library from StudyView."""
+        self.page.go("/library")
+
     def render_loading(self):
         self.content = ft.Container(content=ft.ProgressRing(), alignment=ft.alignment.center)
         self.update()
@@ -211,7 +215,13 @@ class StudyView(ft.Container):
 
             controls = feedback_content + [ft.Container(height=20), ft.Row(actions)]
 
-        self.content = ft.Column(controls, scroll=ft.ScrollMode.AUTO, expand=True)
+        # Always show a back button at the top
+        header = ft.Row([
+            ft.IconButton(icon=ft.Icons.ARROW_BACK, tooltip="Back", on_click=self.go_back),
+            ft.Text("Back to Library", weight="bold"),
+        ])
+
+        self.content = ft.Column([header] + controls, scroll=ft.ScrollMode.AUTO, expand=True)
         self.update()
 
 

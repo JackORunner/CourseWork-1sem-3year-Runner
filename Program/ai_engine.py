@@ -94,7 +94,7 @@ class AIEngine:
         prompt = (
             f"Generate a concise but comprehensive educational text about '{topic}' within the subject of '{subject}'. "
             "The text should be approximately 300 words, suitable for a student to read and then attempt to recall. "
-            "Focus on key facts and core concepts. Provide plain text without markdown."
+            "Focus on key facts and core concepts. Provide plain text without markdown. give output in the same language as the topic.\n\n"
         )
 
         try:
@@ -110,7 +110,7 @@ class AIEngine:
             "You are an expert teacher. Compare the following 'Original Text' with the 'User Attempt' at recalling it.\n\n"
             f"Original Text:\n{original_text}\n\n"
             f"User Attempt:\n{user_attempt}\n\n"
-            "Identify missing key facts and misinterpretations. Provide the output in STRICT JSON format:"
+            "Identify missing key facts and misinterpretations.Provide output in the same language as the original text. Provide the output in STRICT JSON format:"
             "{\n  \"score\": <0-100>,\n  \"missing_key_facts\": [],\n  \"misinterpretations\": [],\n  \"summary_feedback\": \"...\"\n}\n"
             "Return ONLY the JSON object."
         )
