@@ -2,6 +2,16 @@ import os
 import json
 from typing import Dict, Any, Optional
 
+# Defaults for instructions
+DEFAULT_READ_INSTRUCTION = (
+    "Read the material carefully and focus on understanding the main ideas. "
+    "Do not take notes; just read and absorb the concepts."
+)
+DEFAULT_RECALL_INSTRUCTION = (
+    "Close the text and reconstruct it from memory in your own words. "
+    "Cover key facts, definitions, and relationships."
+)
+
 # Try to import Google SDK; fall back to REST when not available
 try:
     import google.generativeai as genai  # type: ignore[import-not-found]
@@ -22,9 +32,9 @@ class AIEngine:
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key: Optional[str] = api_key or os.getenv("GOOGLE_API_KEY")
         # SDK-style vs REST-style model names
-        self.sdk_model: str = (model or "gemini-2.5-flash-lite")
+        self.sdk_model: str = (model or "gemini-2.5-flash")
         # REST defaults to a Gemini model to avoid 404s on deprecated PaLM endpoints
-        self.rest_model: str = (model or "models/gemini-2.5-flash-lite")
+        self.rest_model: str = (model or "models/gemini-2.5-flash")
         self.base = "https://generativelanguage.googleapis.com"
 
         self._sdk_model: Optional[Any] = None
@@ -94,7 +104,7 @@ class AIEngine:
         prompt = (
             f"Generate a concise but comprehensive educational text about '{topic}' within the subject of '{subject}'. "
             "The text should be approximately 300 words, suitable for a student to read and then attempt to recall. "
-            "Focus on key facts and core concepts. Provide plain text without markdown. give output in the same language as the topic.\n\n"
+            "Focus on key facts and core concepts. Give output in the same language as the topic. Provide plain text without markdown. \n\n"
         )
 
         try:
@@ -105,21 +115,61 @@ class AIEngine:
         except Exception as e:
             return f"Error generating content: {e}"
 
-    def analyze_recall(self, original_text: str, user_attempt: str) -> Dict[str, Any]:
+    def _sanitize_instruction(self, text: Optional[str], fallback: str) -> str:
+        if not text:
+            return fallback
+        clean = text.strip()
+        # Simple sanity checks: must have letters, length, and not be mostly repeated chars
+        if len(clean) < 4:
+            return fallback
+        alpha_ratio = sum(ch.isalpha() for ch in clean) / max(len(clean), 1)
+        if alpha_ratio < 0.3:
+            return fallback
+        if len(set(clean.lower())) < 4:
+            return fallback
+        return clean
+
+    def analyze_recall(
+        self,
+        original_text: str,
+        user_attempt: str,
+        recall_instruction: Optional[str] = None,
+        memorization_instruction: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # Validate custom instruction; fallback to default if empty or nonsensical
+        safe_recall = self._sanitize_instruction(recall_instruction, DEFAULT_RECALL_INSTRUCTION)
+        safe_read = self._sanitize_instruction(memorization_instruction, DEFAULT_READ_INSTRUCTION)
         prompt = (
-            "You are an expert teacher. Compare the following 'Original Text' with the 'User Attempt' at recalling it.\n\n"
-            f"Original Text:\n{original_text}\n\n"
+            "You are a strict evaluator. Your goal is to grade a student based on how well they followed the instructions provided below.\n\n"
+            
+            f"--- CONTEXT (What the student was told to memorize) ---\n"
+            f"Memorization Instruction: \"{safe_read}\"\n\n"  
+            
+            f"--- CURRENT TASK (What the student must do now) ---\n"
+            f"Recall Instruction: \"{safe_recall}\"\n\n"
+            
+            f"--- RULES OF EVALUATION ---\n"
+            f"1. SCOPE: Focus ONLY on the information requested in the Instructions above.\n"
+            f"2. CONNECTIVITY: If 'Recall Instruction' refers to the 'previous stage' or 'memorization task', refer to the 'Memorization Instruction' to understand what facts are required.\n" # <--- ВАЖЛИВЕ ПРАВИЛО
+            f"3. IGNORE EXTRA: If the Original Text contains details NOT requested, do NOT count them as missing.\n"
+            f"4. MISSING FACTS: The list 'missing_key_facts' must ONLY contain facts that were REQUESTED but OMITTED.\n"
+            f"5. SCORE: If the user fulfilled the specific instruction perfectly, the score must be 100.\n\n"
+            
+            f"Original Text (Source Material):\n{original_text}\n\n"
+            
             f"User Attempt:\n{user_attempt}\n\n"
-            "Identify missing key facts and misinterpretations.Provide output in the same language as the original text. Provide the output in STRICT JSON format:"
+            
+            "Analyze the attempt based on the Rules above. Provide output in the same language as the User Attempt / Original Text.\n"
+            "Return STRICT JSON format:\n"
             "{\n  \"score\": <0-100>,\n  \"missing_key_facts\": [],\n  \"misinterpretations\": [],\n  \"summary_feedback\": \"...\"\n}\n"
             "Return ONLY the JSON object."
         )
-
+        
         try:
             if self._sdk_model:
                 text = self._sdk_call(prompt)
             else:
-                text = self._rest_call(prompt, max_tokens=512)
+                text = self._rest_call(prompt, max_tokens=1024)
 
             if text.startswith("```json"):
                 text = text[7:-3].strip()

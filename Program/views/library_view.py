@@ -1,7 +1,14 @@
+import os
+import sys
 import flet as ft
-from database import Database
-from ai_engine import AIEngine
 import datetime
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from database import Database
+from ai_engine import AIEngine, DEFAULT_READ_INSTRUCTION, DEFAULT_RECALL_INSTRUCTION
 
 
 class LibraryView(ft.Container):
@@ -281,18 +288,42 @@ class AddMaterialDialog(ft.AlertDialog):
             expand=True,
         )
 
+        self.read_instruction_field = ft.TextField(
+            label="Memorization instructions (optional)",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            hint_text=DEFAULT_READ_INSTRUCTION,
+        )
+
+        self.recall_instruction_field = ft.TextField(
+            label="Recall instructions (optional)",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            hint_text=DEFAULT_RECALL_INSTRUCTION,
+        )
+
         # Pre-fill for edit mode
         if self.is_edit:
             self.subject_field.value = self.material.get("subject", "")
             self.topic_field.value = self.material.get("topic_name", "")
             self.content_field.value = self.material.get("content", "")
+            self.read_instruction_field.value = self.material.get("instruction_read", "")
+            self.recall_instruction_field.value = self.material.get("instruction_recall", "")
 
         self.ai_subject_field = ft.TextField(label="Subject")
         self.ai_topic_field = ft.TextField(label="Topic")
         self.ai_loading = ft.ProgressRing(visible=False)
 
         self.manual_content = ft.Column(
-            [self.subject_field, self.topic_field, self.content_field],
+            [
+                self.subject_field,
+                self.topic_field,
+                self.content_field,
+                self.read_instruction_field,
+                self.recall_instruction_field,
+            ],
             scroll=ft.ScrollMode.AUTO,
             height=300,
         )
@@ -363,6 +394,12 @@ class AddMaterialDialog(ft.AlertDialog):
             self.topic_field.value = self.ai_topic_field.value
             self.content_field.value = text
 
+            # Reset custom instructions to defaults if empty when generating
+            if not self.read_instruction_field.value:
+                self.read_instruction_field.value = DEFAULT_READ_INSTRUCTION
+            if not self.recall_instruction_field.value:
+                self.recall_instruction_field.value = DEFAULT_RECALL_INSTRUCTION
+
             self.tabs.selected_index = 0
             self.handle_tab_change(None)
 
@@ -374,18 +411,30 @@ class AddMaterialDialog(ft.AlertDialog):
 
     def save(self, e):
         if self.subject_field.value and self.topic_field.value and self.content_field.value:
+            # Fallback to defaults if empty
+            instr_read = self.read_instruction_field.value.strip() if self.read_instruction_field.value else ""
+            instr_recall = self.recall_instruction_field.value.strip() if self.recall_instruction_field.value else ""
+            if not instr_read:
+                instr_read = DEFAULT_READ_INSTRUCTION
+            if not instr_recall:
+                instr_recall = DEFAULT_RECALL_INSTRUCTION
+
             if self.is_edit and self.material:
                 self.db.update_material(
                     self.material.get("id"),
                     self.subject_field.value,
                     self.topic_field.value,
                     self.content_field.value,
+                    instr_read,
+                    instr_recall,
                 )
             else:
                 self.db.add_material(
                     self.subject_field.value,
                     self.topic_field.value,
                     self.content_field.value,
+                    instr_read,
+                    instr_recall,
                 )
             self.pg.close(self)
             self.on_success()

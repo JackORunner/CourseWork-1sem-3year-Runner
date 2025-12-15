@@ -9,6 +9,16 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "mindrecall.db")
 
+# Defaults for per-material custom instructions
+DEFAULT_READ_INSTRUCTION = (
+    "Read the material carefully and focus on understanding the main ideas. "
+    "Do not take notes; just read and absorb the concepts."
+)
+DEFAULT_RECALL_INSTRUCTION = (
+    "Close the text and reconstruct it from memory in your own words. "
+    "Cover key facts, definitions, and relationships."
+)
+
 class Database:
     def __init__(self, db_name: str = DB_NAME):
         self.db_name = db_name
@@ -21,17 +31,36 @@ class Database:
         """Initializes the database tables."""
         conn = self.get_connection()
         cursor = conn.cursor()
+
+        escaped_read = DEFAULT_READ_INSTRUCTION.replace("'", "''")
+        escaped_recall = DEFAULT_RECALL_INSTRUCTION.replace("'", "''")
         
         # Materials Table
-        cursor.execute('''
+        cursor.execute(
+            f'''
             CREATE TABLE IF NOT EXISTS materials (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 subject TEXT NOT NULL,
                 topic_name TEXT NOT NULL,
                 content TEXT NOT NULL,
+                instruction_read TEXT DEFAULT '{escaped_read}',
+                instruction_recall TEXT DEFAULT '{escaped_recall}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        ''')
+            '''
+        )
+
+        # Backfill columns if upgrading existing DB without instructions
+        cursor.execute("PRAGMA table_info(materials)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "instruction_read" not in cols:
+            cursor.execute(
+                f"ALTER TABLE materials ADD COLUMN instruction_read TEXT DEFAULT '{escaped_read}'"
+            )
+        if "instruction_recall" not in cols:
+            cursor.execute(
+                f"ALTER TABLE materials ADD COLUMN instruction_recall TEXT DEFAULT '{escaped_recall}'"
+            )
 
         # Sessions Table
         cursor.execute('''
@@ -50,30 +79,48 @@ class Database:
         conn.commit()
         conn.close()
 
-    def add_material(self, subject: str, topic_name: str, content: str) -> int:
+    def add_material(
+        self,
+        subject: str,
+        topic_name: str,
+        content: str,
+        instruction_read: str = DEFAULT_READ_INSTRUCTION,
+        instruction_recall: str = DEFAULT_RECALL_INSTRUCTION,
+    ) -> int:
         """Adds a new study material to the database."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO materials (subject, topic_name, content) VALUES (?, ?, ?)",
-            (subject, topic_name, content)
+            """
+            INSERT INTO materials (subject, topic_name, content, instruction_read, instruction_recall)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (subject, topic_name, content, instruction_read, instruction_recall)
         )
         material_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return material_id
 
-    def update_material(self, material_id: int, subject: str, topic_name: str, content: str) -> None:
+    def update_material(
+        self,
+        material_id: int,
+        subject: str,
+        topic_name: str,
+        content: str,
+        instruction_read: str = DEFAULT_READ_INSTRUCTION,
+        instruction_recall: str = DEFAULT_RECALL_INSTRUCTION,
+    ) -> None:
         """Updates an existing study material."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
             UPDATE materials
-            SET subject = ?, topic_name = ?, content = ?
+            SET subject = ?, topic_name = ?, content = ?, instruction_read = ?, instruction_recall = ?
             WHERE id = ?
             """,
-            (subject, topic_name, content, material_id),
+            (subject, topic_name, content, instruction_read, instruction_recall, material_id),
         )
         conn.commit()
         conn.close()
@@ -93,11 +140,19 @@ class Database:
         
         if subject_filter:
             cursor.execute(
-                "SELECT id, subject, topic_name, content, created_at FROM materials WHERE subject = ?",
+                """
+                SELECT id, subject, topic_name, content, instruction_read, instruction_recall, created_at
+                FROM materials WHERE subject = ?
+                """,
                 (subject_filter,)
             )
         else:
-            cursor.execute("SELECT id, subject, topic_name, content, created_at FROM materials")
+            cursor.execute(
+                """
+                SELECT id, subject, topic_name, content, instruction_read, instruction_recall, created_at
+                FROM materials
+                """
+            )
             
         rows = cursor.fetchall()
         conn.close()
@@ -109,7 +164,9 @@ class Database:
                 "subject": row[1],
                 "topic_name": row[2],
                 "content": row[3],
-                "created_at": row[4]
+                "instruction_read": row[4],
+                "instruction_recall": row[5],
+                "created_at": row[6]
             })
         return materials
 
