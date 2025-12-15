@@ -1,0 +1,1801 @@
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\ai_engine.py =====
+import os
+import json
+from typing import Dict, Any, Optional
+import re
+
+# Defaults for instructions
+DEFAULT_READ_INSTRUCTION = (
+    "Read the material carefully and focus on understanding the main ideas. "
+    "Do not take notes; just read and absorb the concepts."
+)
+DEFAULT_RECALL_INSTRUCTION = (
+    "Close the text and reconstruct it from memory in your own words. "
+    "Cover key facts, definitions, and relationships."
+)
+
+# Try to import Google SDK; fall back to REST when not available
+try:
+    import google.generativeai as genai  # type: ignore[import-not-found]
+    _HAS_SDK: bool = True
+except Exception:
+    genai: Any = None
+    _HAS_SDK = False
+
+import requests
+
+
+class AIEngine:
+    """AI engine that uses google.generativeai SDK when available,
+    otherwise falls back to the Generative Language REST API.
+    Works on desktop and Android.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key: Optional[str] = api_key or os.getenv("GOOGLE_API_KEY")
+        # SDK-style vs REST-style model names
+        self.sdk_model: str = (model or "gemini-2.5-flash")
+        # REST defaults to a Gemini model to avoid 404s on deprecated PaLM endpoints
+        self.rest_model: str = (model or "models/gemini-2.5-flash")
+        self.base = "https://generativelanguage.googleapis.com"
+
+        self._sdk_model: Optional[Any] = None
+        if _HAS_SDK and self.api_key:
+            try:
+                # Use getattr to avoid Pylance private export errors.
+                configure = getattr(genai, "configure", None)
+                generative_model_cls = getattr(genai, "GenerativeModel", None)
+                if callable(configure):
+                    configure(api_key=self.api_key)  # type: ignore[misc]
+                if generative_model_cls is not None:
+                    self._sdk_model = generative_model_cls(self.sdk_model)  # type: ignore[call-arg]
+            except Exception:
+                self._sdk_model = None
+
+    def set_api_key(self, api_key: str):
+        """Updates the API key and refreshes SDK model if available."""
+        self.api_key = api_key
+        if _HAS_SDK and genai:
+            try:
+                configure = getattr(genai, "configure", None)
+                generative_model_cls = getattr(genai, "GenerativeModel", None)
+                if callable(configure):
+                    configure(api_key=api_key)  # type: ignore[misc]
+                if generative_model_cls is not None:
+                    self._sdk_model = generative_model_cls(self.sdk_model)  # type: ignore[call-arg]
+            except Exception:
+                self._sdk_model = None
+
+    # REST implementation
+    def _rest_call(self, prompt: str, max_tokens: int = 2500, temperature: float = 0.2) -> str:
+        if not self.api_key:
+            raise ValueError("API Key is missing. Set GOOGLE_API_KEY or pass api_key to AIEngine.")
+        # Gemini REST uses generateContent on v1beta; fall back to v1 for legacy models if needed.
+        version = "v1beta" if "gemini" in self.rest_model else "v1"
+        url = f"{self.base}/{version}/{self.rest_model}:generateContent?key={self.api_key}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            },
+        }
+
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract the first candidate text if present.
+        candidates = data.get("candidates") or []
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts") or []
+            if parts and isinstance(parts[0], dict):
+                return parts[0].get("text", "") or parts[0].get("content", "") or ""
+        # Fall back to an error message to make failures explicit
+        return json.dumps({"error": "empty_response", "data": data})
+
+    def _sdk_call(self, prompt: str):
+        if not self._sdk_model:
+            raise RuntimeError("SDK model not available")
+        return self._sdk_model.generate_content(prompt).text
+
+    def generate_lesson(self, subject: str, topic: str) -> str:
+        prompt = (
+            f"Generate a concise but comprehensive educational text about '{topic}' within the subject of '{subject}'. "
+            "The text should be approximately 300 words, suitable for a student to read and then attempt to recall. "
+            "Focus on key facts and core concepts. Give output in the same language as the topic. Provide plain text without markdown. \n\n"
+        )
+
+        try:
+            if self._sdk_model:
+                return self._sdk_call(prompt)
+            else:
+                return self._rest_call(prompt)
+        except Exception as e:
+            return f"Error generating content: {e}"
+
+    def _sanitize_instruction(self, text: Optional[str], fallback: str) -> str:
+        if not text:
+            return fallback
+        clean = text.strip()
+        # Simple sanity checks: must have letters, length, and not be mostly repeated chars
+        if len(clean) < 4:
+            return fallback
+        alpha_ratio = sum(ch.isalpha() for ch in clean) / max(len(clean), 1)
+        if alpha_ratio < 0.3:
+            return fallback
+        if len(set(clean.lower())) < 4:
+            return fallback
+        return clean
+
+    def analyze_recall(
+        self,
+        original_text: str,
+        user_attempt: str,
+        recall_instruction: Optional[str] = None,
+        memorization_instruction: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # Validate custom instruction; fallback to default if empty or nonsensical
+        safe_recall = self._sanitize_instruction(recall_instruction, DEFAULT_RECALL_INSTRUCTION)
+        safe_read = self._sanitize_instruction(memorization_instruction, DEFAULT_READ_INSTRUCTION)
+        prompt = (
+            "You are a strict evaluator. Your goal is to grade a student based on how well they followed the instructions provided below.\n\n"
+            
+            f"--- CONTEXT (What the student was told to memorize) ---\n"
+            f"Memorization Instruction: \"{safe_read}\"\n\n"  
+            
+            f"--- CURRENT TASK (What the student must do now) ---\n"
+            f"Recall Instruction: \"{safe_recall}\"\n\n"
+            
+            f"--- RULES OF EVALUATION ---\n"
+            f"1. SCOPE: Focus ONLY on the information requested in the Instructions above.\n"
+            f"2. CONNECTIVITY: If 'Recall Instruction' refers to the 'previous stage' or 'memorization task', refer to the 'Memorization Instruction' to understand what facts are required.\n" # <--- ВАЖЛИВЕ ПРАВИЛО
+            f"3. IGNORE EXTRA: If the Original Text contains details NOT requested, do NOT count them as missing.\n"
+            f"4. MISSING FACTS: The list 'missing_key_facts' must ONLY contain facts that were REQUESTED but OMITTED.\n"
+            f"5. SCORE: If the user fulfilled the specific instruction perfectly, the score must be 100.\n\n"
+            
+            f"Original Text (Source Material):\n{original_text}\n\n"
+            
+            f"User Attempt:\n{user_attempt}\n\n"
+            
+            "Analyze the attempt based on the Rules above. Provide output in the same language as the User Attempt / Original Text.\n"
+            "Return STRICT JSON format:\n"
+            "{\n  \"score\": <0-100>,\n  \"missing_key_facts\": [],\n  \"misinterpretations\": [],\n  \"summary_feedback\": \"...\"\n}\n"
+            "Return ONLY the JSON object."
+        )
+        
+        try:
+            if self._sdk_model:
+                text = self._sdk_call(prompt)
+            else:
+                text = self._rest_call(prompt, max_tokens=2500)
+
+            if text.startswith("```json"):
+                text = text[7:-3].strip()
+            elif text.startswith("```"):
+                text = text[3:-3].strip()
+
+            # Try direct JSON first
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                
+                # --- ДОДАЙ ЦЕ ---
+                print("!!!!!!!!!! CRITICAL AI ERROR !!!!!!!!!!!")
+                print(f"FULL RAW TEXT: {text}")
+                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            # ----------------
+                raw_snippet = text[:4000]
+                # Fallback: extract the first JSON-looking block
+                start = raw_snippet.find("{")
+                end = raw_snippet.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    candidate = raw_snippet[start : end + 1]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        pass
+                # Heuristic parse: pull score and missing_key_facts if present
+                score_match = re.search(r'"score"\s*[:=]\s*(\d+)', raw_snippet, re.IGNORECASE)
+                score_val = int(score_match.group(1)) if score_match else 0
+                facts: list[str] = []
+                facts_block = re.search(r'"missing_key_facts"\s*[:=]\s*\[(.*?)\]', raw_snippet, re.IGNORECASE | re.DOTALL)
+                if facts_block:
+                    for piece in re.findall(r'"(.*?)"', facts_block.group(1)):
+                        cleaned = piece.strip()
+                        if cleaned:
+                            facts.append(cleaned)
+                if facts:
+                    print("[AIEngine] Heuristic parse used. Raw snippet:", raw_snippet)
+                    return {
+                        "score": score_val,
+                        "missing_key_facts": facts,
+                        "misinterpretations": [],
+                        "summary_feedback": "Parsed with fallback; check raw output.",
+                        "_raw": raw_snippet,
+                    }
+
+                # Final fallback: show full raw text so the user sees the exact error/response
+                print("[AIEngine] JSON parse fallback. Raw response snippet:", raw_snippet)
+                return {
+                    "score": 0.12,
+                    "missing_key_facts": [f"Error parsing AI response{raw_snippet}"],
+                    "misinterpretations": [],
+                    "summary_feedback": raw_snippet,
+                    "_raw": raw_snippet,
+                }
+        except Exception as e:
+            return {
+                "score": 0,
+                "missing_key_facts": [f"System Error: {e}"],
+                "misinterpretations": [],
+                "summary_feedback": f"System error: {e}",
+                "_raw": str(e),
+            }
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\database.py =====
+import sqlite3
+import json
+from datetime import datetime
+from typing import List, Dict, Optional, Any
+
+import os
+
+# Ensure DB is created in the same directory as this script, not CWD
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "mindrecall.db")
+
+# Defaults for per-material custom instructions
+DEFAULT_READ_INSTRUCTION = (
+    "Read the material carefully and focus on understanding the main ideas. "
+    "Do not take notes; just read and absorb the concepts."
+)
+DEFAULT_RECALL_INSTRUCTION = (
+    "Close the text and reconstruct it from memory in your own words. "
+    "Cover key facts, definitions, and relationships."
+)
+
+class Database:
+    def __init__(self, db_name: str = DB_NAME):
+        self.db_name = db_name
+        self.init_db()
+
+    def get_connection(self):
+        return sqlite3.connect(self.db_name)
+
+    def init_db(self):
+        """Initializes the database tables."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        escaped_read = DEFAULT_READ_INSTRUCTION.replace("'", "''")
+        escaped_recall = DEFAULT_RECALL_INSTRUCTION.replace("'", "''")
+        
+        # Materials Table
+        cursor.execute(
+            f'''
+            CREATE TABLE IF NOT EXISTS materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL,
+                topic_name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                instruction_read TEXT DEFAULT '{escaped_read}',
+                instruction_recall TEXT DEFAULT '{escaped_recall}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            '''
+        )
+
+        # Backfill columns if upgrading existing DB without instructions
+        cursor.execute("PRAGMA table_info(materials)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "instruction_read" not in cols:
+            cursor.execute(
+                f"ALTER TABLE materials ADD COLUMN instruction_read TEXT DEFAULT '{escaped_read}'"
+            )
+        if "instruction_recall" not in cols:
+            cursor.execute(
+                f"ALTER TABLE materials ADD COLUMN instruction_recall TEXT DEFAULT '{escaped_recall}'"
+            )
+
+        # Sessions Table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER,
+                user_input TEXT,
+                ai_score INTEGER,
+                ai_feedback TEXT, -- Stored as JSON string
+                mode TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (material_id) REFERENCES materials (id)
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+
+    def add_material(
+        self,
+        subject: str,
+        topic_name: str,
+        content: str,
+        instruction_read: str = DEFAULT_READ_INSTRUCTION,
+        instruction_recall: str = DEFAULT_RECALL_INSTRUCTION,
+    ) -> int:
+        """Adds a new study material to the database."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO materials (subject, topic_name, content, instruction_read, instruction_recall)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (subject, topic_name, content, instruction_read, instruction_recall)
+        )
+        # sqlite3 may return None for lastrowid on edge cases; coerce to int
+        material_id = int(cursor.lastrowid or 0)
+        conn.commit()
+        conn.close()
+        return material_id
+
+    def update_material(
+        self,
+        material_id: int,
+        subject: str,
+        topic_name: str,
+        content: str,
+        instruction_read: str = DEFAULT_READ_INSTRUCTION,
+        instruction_recall: str = DEFAULT_RECALL_INSTRUCTION,
+    ) -> None:
+        """Updates an existing study material."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE materials
+            SET subject = ?, topic_name = ?, content = ?, instruction_read = ?, instruction_recall = ?
+            WHERE id = ?
+            """,
+            (subject, topic_name, content, instruction_read, instruction_recall, material_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def delete_material(self, material_id: int) -> None:
+        """Deletes a material by its ID."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+        conn.commit()
+        conn.close()
+
+    def get_materials(self, subject_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves materials, optionally filtered by subject."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        if subject_filter:
+            cursor.execute(
+                """
+                SELECT id, subject, topic_name, content, instruction_read, instruction_recall, created_at
+                FROM materials WHERE subject = ?
+                """,
+                (subject_filter,)
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, subject, topic_name, content, instruction_read, instruction_recall, created_at
+                FROM materials
+                """
+            )
+            
+        rows = cursor.fetchall()
+        conn.close()
+        
+        materials = []
+        for row in rows:
+            materials.append({
+                "id": row[0],
+                "subject": row[1],
+                "topic_name": row[2],
+                "content": row[3],
+                "instruction_read": row[4],
+                "instruction_recall": row[5],
+                "created_at": row[6]
+            })
+        return materials
+
+    def get_subjects(self) -> List[str]:
+        """Retrieves a list of all unique subjects."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT subject FROM materials ORDER BY subject")
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
+    def save_session(self, material_id: int, user_input: str, ai_score: int, ai_feedback: Dict, mode: str):
+        """Saves a study session result."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Ensure feedback is stored as a JSON string
+        feedback_json = json.dumps(ai_feedback)
+        
+        cursor.execute(
+            """INSERT INTO sessions 
+               (material_id, user_input, ai_score, ai_feedback, mode) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (material_id, user_input, ai_score, feedback_json, mode)
+        )
+        conn.commit()
+        conn.close()
+
+    def get_sessions(self, material_id: int) -> List[Dict[str, Any]]:
+        """Retrieves session history for a specific material."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, user_input, ai_score, ai_feedback, mode, timestamp 
+               FROM sessions WHERE material_id = ? ORDER BY timestamp DESC""",
+            (material_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        
+        sessions = []
+        for row in rows:
+            sessions.append({
+                "id": row[0],
+                "user_input": row[1],
+                "ai_score": row[2],
+                "ai_feedback": json.loads(row[3]),
+                "mode": row[4],
+                "timestamp": row[5]
+            })
+        return sessions
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\main.py =====
+import os
+import sys
+
+# Make sure the app's project folders are on sys.path inside the APK runtime
+_current_dir = os.path.abspath(os.path.dirname(__file__))
+_parent_dir = os.path.abspath(os.path.join(_current_dir, ".."))
+for p in (_current_dir, _parent_dir):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# Normalize Windows-style bundled filenames (e.g. 'views\\file.py')
+# Some packagers store files with backslashes in the filename instead of
+# creating real directories. Detect those and move them into a proper
+# `views/` directory so imports like `from views.library_view import ...`
+# work inside the APK runtime.
+try:
+    _moved_any = False
+    for fn in os.listdir(_current_dir):
+        if fn.startswith("views\\") or fn.startswith("views/"):
+            # split on whichever separator is present in the filename
+            if "\\" in fn:
+                parts = fn.split("\\", 1)
+            else:
+                parts = fn.split("/", 1)
+            subpath = parts[1] if len(parts) > 1 else parts[0]
+            dest_dir = os.path.join(_current_dir, "views")
+            os.makedirs(dest_dir, exist_ok=True)
+            src = os.path.join(_current_dir, fn)
+            dest = os.path.join(dest_dir, subpath)
+            try:
+                if not os.path.exists(dest):
+                    os.rename(src, dest)
+                _moved_any = True
+            except Exception:
+                try:
+                    # fallback: copy then remove
+                    with open(src, "rb") as r, open(dest, "wb") as w:
+                        w.write(r.read())
+                    os.remove(src)
+                    _moved_any = True
+                except Exception:
+                    pass
+
+    # fix incorrectly named init file (init.py -> __init__.py)
+    init_wrong = os.path.join(_current_dir, "views", "init.py")
+    init_right = os.path.join(_current_dir, "views", "__init__.py")
+    if os.path.exists(init_wrong) and not os.path.exists(init_right):
+        try:
+            os.rename(init_wrong, init_right)
+            _moved_any = True
+        except Exception:
+            try:
+                with open(init_wrong, "rb") as r, open(init_right, "wb") as w:
+                    w.write(r.read())
+                os.remove(init_wrong)
+                _moved_any = True
+            except Exception:
+                pass
+
+    if _moved_any:
+        try:
+            print("DEBUG: normalized bundled view files into real views/ dir")
+        except Exception:
+            pass
+except Exception as _e:
+    print("DEBUG: error normalizing bundled paths:", _e)
+import flet as ft
+from views.library_view import LibraryView
+from views.settings_view import SettingsView
+from views.study_view import StudyView
+
+def main(page: ft.Page):
+    page.title = "MindRecall"
+    # Load theme preference
+    saved_theme = page.client_storage.get("theme_mode")
+    if saved_theme == "light":
+        page.theme_mode = ft.ThemeMode.LIGHT
+    else:
+        page.theme_mode = ft.ThemeMode.DARK
+    page.padding = 0
+    
+    # State for simple routing
+    # Routes: /library, /settings, /study?id=X
+    
+    def route_change(route):
+        page.views.clear()
+        
+        # Base UI Structure (Nav + Content)
+        # We wrap content in a view
+        
+        troute = ft.TemplateRoute(page.route)
+        
+        # Determine current view index for Nav Highlight
+        sel_index = 0
+        if troute.match("/library"): sel_index = 0
+        elif troute.match("/settings"): sel_index = 1
+        
+        # Create Navigation Controls
+        rail = ft.NavigationRail(
+            selected_index=sel_index,
+            label_type=ft.NavigationRailLabelType.ALL,
+            min_width=100,
+            min_extended_width=200,
+            group_alignment=-0.9,
+            destinations=[
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.LIBRARY_BOOKS, selected_icon=ft.Icons.LIBRARY_BOOKS_OUTLINED, label="Library"
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.SETTINGS, selected_icon=ft.Icons.SETTINGS_OUTLINED, label="Settings"
+                ),
+            ],
+            on_change=lambda e: nav_change(e.control.selected_index)
+        )
+
+        bar = ft.NavigationBar(
+            selected_index=sel_index,
+            destinations=[
+                ft.NavigationBarDestination(icon=ft.Icons.LIBRARY_BOOKS, label="Library"),
+                ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label="Settings"),
+            ],
+            on_change=lambda e: nav_change(e.control.selected_index)
+        )
+
+        # Helper to handle nav clicks
+        def nav_change(index):
+            if index == 0: page.go("/library")
+            elif index == 1: page.go("/settings")
+
+        # Content Logic
+        my_content = ft.Container(expand=True)
+        
+        if troute.match("/library") or page.route == "/":
+            my_content.content = LibraryView(page)
+            
+        elif troute.match("/settings"):
+            my_content.content = SettingsView(page)
+            
+        elif page.route.startswith("/study"):
+            # Extract ID from query param manually since Flet routing is simple
+            # route format: /study?id=123
+            try:
+                # simple parse
+                query = page.route.split("?")[1]
+                param = query.split("=")[1]
+                my_content.content = StudyView(page, material_id=int(param))
+                # Hide Nav in Study mode? Or keep it? keeping it is safer for generic nav
+            except Exception as e:
+                print(f"Error loading StudyView: {e}")
+                my_content.content = ft.Text(f"Error loading Study Session: {e}")
+
+        # Responsive Layout
+        # If width > 600, use Rail (Desktop). Else use Bar (Mobile).
+        # Note: Flet page.width might update dynamic. simpler to just check once or use ResponsiveRow.
+        # For a truly responsive shell, we usually listen to resize. 
+        # But 'page.views.append' builds a View object. 
+        
+        view_controls = []
+        
+        # We will use a Row for Desktop (Rail | Content)
+        # And a Column for Mobile (Content | Bar) or just View with proper AppBar/NavBar
+        
+        # Let's use the View's built-in properties for simple responsive nav triggers?
+        # Actually Flet Views work best with AppBar/NavDrawer/NavBar params.
+        
+        if (page.width or 0) > 600:
+             # Desktop Layout
+             page.views.append(
+                ft.View(
+                    route,
+                    [
+                        ft.Row(
+                            [
+                                rail,
+                                ft.VerticalDivider(width=1),
+                                my_content
+                            ],
+                            expand=True,
+                        )
+                    ]
+                )
+            )
+        else:
+            # Mobile Layout
+            page.views.append(
+                ft.View(
+                    route,
+                    [my_content],
+                    navigation_bar=bar # Native bottom bar
+                )
+            )
+            
+        page.update()
+
+    def view_pop(view):
+        page.views.pop()
+        top_view = page.views[-1]
+        try:
+            page.go(top_view.route or "/library")
+        except Exception:
+            page.go("/library")
+
+    page.on_route_change = route_change
+    page.on_view_pop = view_pop
+    
+    # Default Route
+    page.go("/library")
+
+if __name__ == "__main__":
+    print("Starting MindRecall Application...")
+    try:
+        ft.app(target=main)
+    except Exception as e:
+        print(f"Error starting app: {e}")
+        input("Press Enter to exit...")
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\requirements.txt =====
+flet
+requests
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\tests\test_app_structure.py =====
+import sys
+import os
+
+# Add project root to path
+sys.path.append(os.getcwd())
+
+def test_imports():
+    print("Testing Imports...")
+    try:
+        from Program.main import main
+        from views.library_view import LibraryView
+        from views.study_view import StudyView
+        from views.settings_view import SettingsView
+        print("Imports Successful.")
+    except ImportError as e:
+        print(f"Import Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected Error during imports: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    test_imports()
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\tests\test_backend.py =====
+import os
+import json
+from database import Database
+from ai_engine import AIEngine
+
+def test_database():
+    print("Testing Database...")
+    if os.path.exists("test_mindrecall.db"):
+        os.remove("test_mindrecall.db")
+    
+    db = Database("test_mindrecall.db")
+    
+    # Test Add Material
+    mat_id = db.add_material("History", "French Rev", "Liberty, Equality, Fraternity.")
+    print(f"Added Material ID: {mat_id}")
+    
+    # Test Get Materials
+    materials = db.get_materials()
+    assert len(materials) == 1
+    assert materials[0]["subject"] == "History"
+    print("Get Materials: PASS")
+    
+    # Test Get Subjects
+    subjects = db.get_subjects()
+    assert "History" in subjects
+    print("Get Subjects: PASS")
+
+    # Test Save Session
+    feedback = {"score": 90, "summary": "Good job"}
+    db.save_session(mat_id, "Liberty Equality Fraternity", 90, feedback, "Standard")
+    
+    # Test Get Sessions
+    sessions = db.get_sessions(mat_id)
+    assert len(sessions) == 1
+    assert sessions[0]["ai_score"] == 90
+    assert sessions[0]["ai_feedback"]["score"] == 90
+    print("Session Management: PASS")
+    
+    db.get_connection().close()
+    if os.path.exists("test_mindrecall.db"):
+        os.remove("test_mindrecall.db")
+    print("Database Tests Completed Successfully.\n")
+
+def test_ai_engine():
+    print("Testing AI Engine (Offline checks)...")
+    try:
+        engine = AIEngine() 
+        # calls without key should raise error or handle gracefully
+        try:
+             res = engine.generate_lesson("Math", "Pi")
+             print(f"Generate Lesson (No Key): {res}") # Should be error message
+        except ValueError as e:
+             print(f"Generate Lesson (No Key): caught expected error -> {e}")
+
+        try:
+            res = engine.analyze_recall("Original", "Attempt")
+            if isinstance(res, dict) and "score" in res:
+                 print(f"Analyze Recall (No Key): Unexpected success? {res}")
+            else:
+                 # It might return a dict with error info if handled internally
+                 print(f"Analyze Recall (No Key): {res}")
+        except ValueError as e:
+             print(f"Analyze Recall (No Key): caught expected error -> {e}")
+
+        print("AI Engine Offline Tests Completed.\n")
+
+    except Exception as e:
+        print(f"AI Engine Test Failed: {e}")
+
+if __name__ == "__main__":
+    test_database()
+    test_ai_engine()
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\tests\test_ui_flow.py =====
+
+import sys
+import os
+import flet as ft
+from unittest.mock import MagicMock, patch
+import logging
+
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from views.library_view import LibraryView
+from views.study_view import StudyView
+from views.settings_view import SettingsView
+import ai_engine
+import database
+
+# Setup Logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+def test_library_view_logic():
+    print("\n--- Testing LibraryView Logic ---")
+    page = MagicMock(spec=ft.Page)
+    page.client_storage = MagicMock()
+    page.client_storage.get.return_value = "fake_key"
+
+    # Mock DB
+    with patch('views.library_view.Database') as MockDB:
+        mock_db_instance = MockDB.return_value
+        mock_db_instance.get_materials.return_value = [{'id': 1, 'subject': 'Hist', 'topic_name': 'Test', 'content': 'foo'}]
+        mock_db_instance.get_subjects.return_value = ['Hist']
+        
+        # Init View
+        try:
+            lib = LibraryView(page)
+            lib.did_mount()
+            print("✓ LibraryView initialized and mounted")
+        except Exception as e:
+            print(f"FAILED: LibraryView Init: {e}")
+            return
+
+        # Open Dialog
+        try:
+            lib.open_add_dialog(None)
+            dialog = lib.add_dialog
+            print("✓ Add Dialog Opened")
+        except Exception as e:
+            print(f"FAILED: Open Add Dialog: {e}")
+            return
+
+        # Test Save Validation (Empty)
+        try:
+            dialog.save(None)
+            if dialog.subject_field.error_text == "Required":
+                print("✓ Validation Logic Triggered Correctly")
+            else:
+                print(f"FAILED: Validation Logic (Expected error text, got {dialog.subject_field.error_text})")
+        except Exception as e:
+            print(f"FAILED: Save Empty: {e}")
+
+        # Test Save Success
+        try:
+            dialog.subject_field.value = "Math"
+            dialog.topic_field.value = "Algebra"
+            dialog.content_field.value = "1+1=2"
+            dialog.save(None)
+            mock_db_instance.add_material.assert_called()
+            print("✓ Save Logic Validated")
+        except Exception as e:
+            print(f"FAILED: Save Success: {e}")
+
+        # Test AI Generate Button (Logic only)
+        try:
+             # Set values
+            dialog.ai_subject_field.value = "Science"
+            dialog.ai_topic_field.value = "Atoms"
+            
+            # Mock AI
+            lib.ai.generate_lesson = MagicMock(return_value="Generated Content")
+            
+            dialog.generate_content(None)
+            
+            if dialog.content_field.value == "Generated Content":
+                 print("✓ AI Generation Integration Logic Validated")
+            else:
+                 print(f"FAILED: AI Generation (Expected 'Generated Content', got '{dialog.content_field.value}')")
+
+        except Exception as e:
+            print(f"FAILED: AI Gen Logic: {e}")
+
+
+def test_study_view_logic():
+    print("\n--- Testing StudyView Logic ---")
+    page = MagicMock(spec=ft.Page)
+    page.client_storage.get.return_value = "fake_key"
+    
+    # Mock DB and AI
+    with patch('views.study_view.Database') as MockDB:
+        mock_db_instance = MockDB.return_value
+        mock_db_instance.get_materials.return_value = [{'id': 1, 'subject': 'Hist', 'topic_name': 'Test', 'content': 'This is a test content.'}]
+        
+        try:
+            study = StudyView(page, material_id=1)
+            study.did_mount()
+            print("✓ StudyView initialized and mounted")
+        except Exception as e:
+            print(f"FAILED: StudyView Init: {e}")
+            return
+            
+        # Test Mode Select -> Read
+        try:
+            # Simulate click on Standard Mode
+            e = MagicMock()
+            e.control.data = "Standard"
+            study.set_mode(e)
+            study.go_to_read(e)
+            
+            if study.step == 2:
+                 print("✓ Transition to Read Step (Step 2)")
+            else:
+                 print(f"FAILED: Transition to Read (Step {study.step})")
+        except Exception as e:
+            print(f"FAILED: Go To Read: {e}")
+            return
+
+        # Test Read -> Recall
+        try:
+            study.go_to_recall(None)
+            if study.step == 3:
+                print("✓ Transition to Recall Step (Step 3)")
+            else:
+                print(f"FAILED: Transition to Recall (Step {study.step})")
+        except Exception as e:
+            print(f"FAILED: Go To Recall: {e}")
+            return
+
+        # Test Submit Logic
+        try:
+            study.recall_input = MagicMock()
+            study.recall_input.value = "This is a test content."
+            
+            study.ai.analyze_recall = MagicMock(return_value={'score': 100, 'summary_feedback': 'Good', 'missing_key_facts': []})
+            
+            study.submit_recall(None)
+            
+            if study.step == 4:
+                print("✓ Transition to Feedback Step (Step 4)")
+            else:
+                print(f"FAILED: Transition to Feedback (Step {study.step})")
+                
+            mock_db_instance.save_session.assert_called()
+            print("✓ Session Saved to DB")
+            
+        except Exception as e:
+             print(f"FAILED: Submit Recall: {e}")
+
+
+def test_settings_view_logic():
+    print("\n--- Testing SettingsView Logic ---")
+    page = MagicMock(spec=ft.Page)
+    page.client_storage = MagicMock()
+    page.client_storage.get.return_value = None
+
+    try:
+        settings = SettingsView(page)
+        settings.did_mount()
+        print("✓ SettingsView initialized")
+    except Exception as e:
+        print(f"FAILED: Init Settings: {e}")
+        return
+
+    try:
+        settings.api_key_field.value = "new_key"
+        settings.save_api_key(None)
+        page.client_storage.set.assert_called_with("google_api_key", "new_key")
+        print("✓ Save API Key Logic Validated")
+    except Exception as e:
+        print(f"FAILED: Save API Key: {e}")
+
+if __name__ == "__main__":
+    test_library_view_logic()
+    test_study_view_logic()
+    test_settings_view_logic()
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\views\__init__.py =====
+# Views package initialization
+# This file makes the views directory a Python package
+
+__all__ = ['library_view', 'settings_view', 'study_view']
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\views\library_view.py =====
+import os
+import sys
+import flet as ft
+import datetime
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from Program.database import Database
+from Program.ai_engine import AIEngine, DEFAULT_READ_INSTRUCTION, DEFAULT_RECALL_INSTRUCTION
+
+
+class LibraryView(ft.Container):
+    def __init__(self, page: ft.Page):
+        super().__init__()
+        self.expand = True
+        self.padding = 20
+        self.pg: ft.Page = page
+        self.db = Database()
+        self.ai = AIEngine()
+        self._delete_dialog: ft.AlertDialog | None = None
+        self._pending_delete_id: int | None = None
+
+        self.materials_list = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
+        
+        self.search_field = ft.TextField(
+            label="Search topics...",
+            prefix_icon=ft.Icons.SEARCH,
+            expand=True,
+            on_change=self.filter_materials
+        )
+        
+        self.subject_filter = ft.Dropdown(
+            label="Filter by Subject",
+            options=[ft.dropdown.Option("All")],
+            value="All",
+            width=200,
+            on_change=self.filter_materials,
+        )
+
+        self.content = ft.Column(
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Text("Library", size=30, weight=ft.FontWeight.BOLD),
+                        ft.FloatingActionButton(
+                            icon=ft.Icons.ADD,
+                            text="Add Material",
+                            on_click=self.open_add_dialog,
+                        ),
+                    ],
+                ),
+                ft.Divider(),
+                ft.Row(
+                    controls=[
+                        self.search_field,
+                        self.subject_filter,
+                    ]
+                ),
+                ft.Container(height=10),
+                self.materials_list,
+            ],
+        )
+
+        self.check_api_key()
+
+    def check_api_key(self):
+        api_key = self.pg.client_storage.get("google_api_key")
+        if isinstance(api_key, str) and hasattr(self.ai, "set_api_key"):
+            self.ai.set_api_key(api_key)
+
+    def did_mount(self):
+        self.load_materials()
+        self.load_subjects()
+
+    def load_subjects(self):
+        subjects = self.db.get_subjects()
+        options = [ft.dropdown.Option("All")] + [ft.dropdown.Option(s) for s in subjects]
+        self.subject_filter.options = options
+        self.update()
+
+    def load_materials(self, subject: str | None = None, search_query: str | None = "") -> None:
+        self.materials_list.controls.clear()
+        
+        # Get all materials first (or filter by subject if DB supports it efficiently)
+        # Since DB.get_materials handles subject filtering:
+        filter_subj = subject if subject != "All" else None
+        materials = self.db.get_materials(filter_subj)
+
+        # Apply search filter in memory
+        if search_query:
+            query = search_query.lower()
+            materials = [
+                m for m in materials 
+                if query in m["topic_name"].lower() or query in m["content"].lower()
+            ]
+
+        if not materials:
+            self.materials_list.controls.append(
+                ft.Text("No materials found.", italic=True)
+            )
+        else:
+            for mat in materials:
+                self.materials_list.controls.append(
+                    ft.Card(
+                        expand=True,
+                        content=ft.Container(
+                            padding=10,
+                            expand=True,
+                            content=ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Row(
+                                        spacing=10,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        expand=True,
+                                        controls=[
+                                            ft.Icon(ft.Icons.BOOK),
+                                            ft.Column(
+                                                spacing=2,
+                                                expand=True,
+                                                controls=[
+                                                    ft.Container(
+                                                        expand=True,
+                                                        content=ft.Text(
+                                                            mat["topic_name"],
+                                                            weight=ft.FontWeight.BOLD,
+                                                            overflow=ft.TextOverflow.ELLIPSIS,
+                                                            max_lines=1,
+                                                        ),
+                                                    ),
+                                                    ft.Container(
+                                                        expand=True,
+                                                        content=ft.Text(
+                                                            f"{mat['subject']} • {len(mat['content'].split())} words",
+                                                            color=ft.Colors.GREY_600,
+                                                            size=12,
+                                                            overflow=ft.TextOverflow.ELLIPSIS,
+                                                            max_lines=1,
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                    ft.Row(
+                                        spacing=4,
+                                        alignment=ft.MainAxisAlignment.END,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        controls=[
+                                            ft.IconButton(
+                                                icon=ft.Icons.EDIT,
+                                                tooltip="Edit",
+                                                icon_size=20,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.open_edit_dialog(m),
+                                            ),
+                                            ft.IconButton(
+                                                icon=ft.Icons.PLAY_ARROW,
+                                                tooltip="Start Study Session",
+                                                icon_size=22,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.start_study(m),
+                                            ),
+                                            ft.IconButton(
+                                                icon=ft.Icons.DELETE,
+                                                tooltip="Delete",
+                                                icon_size=22,
+                                                style=ft.ButtonStyle(padding=0),
+                                                on_click=lambda e, m=mat: self.open_delete_dialog(m),
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ),
+                    )
+                )
+        self.update()
+
+    def filter_materials(self, e):
+        subject_val = self.subject_filter.value or "All"
+        search_val = self.search_field.value or ""
+        self.load_materials(
+            subject=subject_val,
+            search_query=search_val,
+        )
+
+    def start_study(self, material):
+        self.pg.go(f"/study?id={material['id']}")
+
+    def open_edit_dialog(self, material):
+        self.edit_dialog = AddMaterialDialog(self.pg, self.on_material_updated, material)
+        self.pg.open(self.edit_dialog)
+        self.pg.update()
+
+    def open_add_dialog(self, e):
+        self.add_dialog = AddMaterialDialog(self.pg, self.on_material_added)
+        self.pg.open(self.add_dialog)
+        self.pg.update()
+
+    def open_delete_dialog(self, material):
+        self._pending_delete_id = material.get("id")
+        self._delete_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Delete material"),
+            content=ft.Text(f"Delete \"{material.get('topic_name')}\"? This cannot be undone."),
+            actions=[
+                ft.TextButton("Cancel", on_click=self._cancel_delete),
+                ft.ElevatedButton(
+                    "Delete",
+                    bgcolor=ft.Colors.RED,
+                    on_click=self.confirm_delete
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.pg.open(self._delete_dialog)
+        self.pg.update()
+
+    def _cancel_delete(self, e):
+        if self._delete_dialog:
+            self.pg.close(self._delete_dialog)
+            self._delete_dialog = None
+        self._pending_delete_id = None
+        self.pg.update()
+
+    def confirm_delete(self, e):
+        if self._pending_delete_id is not None:
+            self.db.delete_material(self._pending_delete_id)
+        if self._delete_dialog:
+            self.pg.close(self._delete_dialog)
+            self._delete_dialog = None
+        self._pending_delete_id = None
+        self.on_material_deleted()
+
+    def on_material_added(self):
+        self.load_materials()
+        self.load_subjects()
+        self.pg.snack_bar = ft.SnackBar(ft.Text("Material added successfully!"))  # type: ignore[attr-defined]
+        self.pg.snack_bar.open = True  # type: ignore[attr-defined]
+        self.pg.update()
+
+    def on_material_updated(self):
+        self.load_materials()
+        self.load_subjects()
+        self.pg.snack_bar = ft.SnackBar(ft.Text("Material updated."))  # type: ignore[attr-defined]
+        self.pg.snack_bar.open = True  # type: ignore[attr-defined]
+        self.pg.update()
+
+    def on_material_deleted(self):
+        self.load_materials()
+        self.load_subjects()
+        self.pg.snack_bar = ft.SnackBar(ft.Text("Material deleted."))  # type: ignore[attr-defined]
+        self.pg.snack_bar.open = True  # type: ignore[attr-defined]
+        self.pg.update()
+
+
+class AddMaterialDialog(ft.AlertDialog):
+    def __init__(self, page: ft.Page, on_success, material=None):
+        super().__init__()
+        self.pg: ft.Page = page
+        self.on_success = on_success
+        self.db = Database()
+        self.ai = AIEngine(api_key=self.pg.client_storage.get("google_api_key"))
+        self.material = material
+        self.is_edit = material is not None
+
+        self.tabs = ft.Tabs(
+            selected_index=0,
+            animation_duration=300,
+            tabs=[
+                ft.Tab(text="Manual Paste", icon=ft.Icons.EDIT),
+                ft.Tab(text="AI Generate", icon=ft.Icons.AUTO_AWESOME),
+            ],
+            expand=True,
+            on_change=self.handle_tab_change,
+        )
+
+        self.subject_field = ft.TextField(label="Subject (e.g., History)")
+        self.topic_field = ft.TextField(label="Topic (e.g., French Revolution)")
+        self.content_field = ft.TextField(
+            label="Content",
+            multiline=True,
+            min_lines=5,
+            max_lines=10,
+            expand=True,
+        )
+
+        self.read_instruction_field = ft.TextField(
+            label="Memorization instructions (optional)",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            hint_text=DEFAULT_READ_INSTRUCTION,
+        )
+
+        self.recall_instruction_field = ft.TextField(
+            label="Recall instructions (optional)",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            hint_text=DEFAULT_RECALL_INSTRUCTION,
+        )
+
+        # Pre-fill for edit mode
+        if self.is_edit and self.material:
+            self.subject_field.value = self.material.get("subject", "")
+            self.topic_field.value = self.material.get("topic_name", "")
+            self.content_field.value = self.material.get("content", "")
+            self.read_instruction_field.value = self.material.get("instruction_read", "")
+            self.recall_instruction_field.value = self.material.get("instruction_recall", "")
+
+        self.ai_subject_field = ft.TextField(label="Subject")
+        self.ai_topic_field = ft.TextField(label="Topic")
+        self.ai_loading = ft.ProgressRing(visible=False)
+
+        self.manual_content = ft.Column(
+            [
+                self.subject_field,
+                self.topic_field,
+                self.content_field,
+                self.read_instruction_field,
+                self.recall_instruction_field,
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            height=300,
+        )
+
+        self.ai_content = ft.Column(
+            [
+                ft.Text("Enter a subject and topic, and AI will generate a lesson for you."),
+                self.ai_subject_field,
+                self.ai_topic_field,
+                ft.ElevatedButton("Generate Content", on_click=self.generate_content),
+                self.ai_loading,
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            height=300,
+        )
+
+        self.content = ft.Container(
+            width=500,
+            height=400,
+            content=ft.Column(
+                [
+                    self.tabs,
+                    ft.Container(
+                        content=self.manual_content, expand=True, visible=True, key="manual_container"
+                    ),
+                    ft.Container(
+                        content=self.ai_content, expand=True, visible=False, key="ai_container"
+                    ),
+                ]
+            ),
+        )
+
+        action_label = "Update" if self.is_edit else "Save"
+        self.actions = [
+            ft.TextButton("Cancel", on_click=self.close),
+            ft.ElevatedButton(action_label, on_click=self.save),
+        ]
+        self.actions_alignment = ft.MainAxisAlignment.END
+
+    def handle_tab_change(self, e):
+        is_manual = self.tabs.selected_index == 0
+        container = self.content
+        if isinstance(container, ft.Container) and isinstance(container.content, ft.Column):
+            cols = container.content.controls
+            if len(cols) >= 3:
+                cols[1].visible = is_manual
+                cols[2].visible = not is_manual
+        self.pg.update()
+
+    def generate_content(self, e):
+        if not self.ai_subject_field.value or not self.ai_topic_field.value:
+            self.ai_subject_field.error_text = "Required" if not self.ai_subject_field.value else None
+            self.ai_topic_field.error_text = "Required" if not self.ai_topic_field.value else None
+            self.pg.update()
+            return
+
+        self.ai_loading.visible = True
+        self.pg.update()
+
+        try:
+            api_key = self.pg.client_storage.get("google_api_key")
+            if isinstance(api_key, str) and hasattr(self.ai, "set_api_key"):
+                self.ai.set_api_key(api_key)
+
+            text = self.ai.generate_lesson(self.ai_subject_field.value, self.ai_topic_field.value)
+
+            self.subject_field.value = self.ai_subject_field.value
+            self.topic_field.value = self.ai_topic_field.value
+            self.content_field.value = text
+
+            # Reset custom instructions to defaults if empty when generating
+            if not self.read_instruction_field.value:
+                self.read_instruction_field.value = DEFAULT_READ_INSTRUCTION
+            if not self.recall_instruction_field.value:
+                self.recall_instruction_field.value = DEFAULT_RECALL_INSTRUCTION
+
+            self.tabs.selected_index = 0
+            self.handle_tab_change(None)
+
+        except Exception as ex:
+            self.content_field.value = f"Error: {ex}"
+
+        self.ai_loading.visible = False
+        self.pg.update()
+
+    def save(self, e):
+        if self.subject_field.value and self.topic_field.value and self.content_field.value:
+            # Fallback to defaults if empty
+            instr_read = self.read_instruction_field.value.strip() if self.read_instruction_field.value else ""
+            instr_recall = self.recall_instruction_field.value.strip() if self.recall_instruction_field.value else ""
+            if not instr_read:
+                instr_read = DEFAULT_READ_INSTRUCTION
+            if not instr_recall:
+                instr_recall = DEFAULT_RECALL_INSTRUCTION
+
+            if self.is_edit and self.material:
+                self.db.update_material(
+                    self.material.get("id"),
+                    self.subject_field.value,
+                    self.topic_field.value,
+                    self.content_field.value,
+                    instr_read,
+                    instr_recall,
+                )
+            else:
+                self.db.add_material(
+                    self.subject_field.value,
+                    self.topic_field.value,
+                    self.content_field.value,
+                    instr_read,
+                    instr_recall,
+                )
+            self.pg.close(self)
+            self.on_success()
+        else:
+            self.subject_field.error_text = "Required" if not self.subject_field.value else None
+            self.topic_field.error_text = "Required" if not self.topic_field.value else None
+            self.content_field.error_text = "Required" if not self.content_field.value else None
+            self.pg.update()
+
+    def close(self, e):
+        self.pg.close(self)
+        self.pg.update()
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\views\settings_view.py =====
+import flet as ft
+
+class SettingsView(ft.Column):
+    def __init__(self, page: ft.Page):
+        super().__init__()
+        self.page = page
+        self.api_key_field = ft.TextField(
+            label="Google Gemini API Key",
+            password=True,
+            can_reveal_password=True,
+            width=400
+        )
+        
+        self.theme_switch = ft.Switch(
+            label="Light Mode",
+            on_change=self.toggle_theme
+        )
+
+        self.controls = [
+            ft.Container(
+                padding=20,
+                content=ft.Column(
+                    controls=[
+                        ft.Text("Settings", size=30, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Text("Appearance", size=20, weight=ft.FontWeight.BOLD),
+                        self.theme_switch,
+                        ft.Divider(),
+                        ft.Text("AI Configuration", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Text("Configure your AI settings below.", size=16),
+                        ft.Container(height=10),
+                        self.api_key_field,
+                        ft.ElevatedButton(
+                            text="Save API Key",
+                            icon=ft.Icons.SAVE,
+                            on_click=self.save_api_key
+                        ),
+                        ft.Container(height=20),
+                        ft.Text(
+                            "Note: Your API Key is stored locally on this device.",
+                            size=12,
+                            italic=True,
+                            color=ft.Colors.GREY_500
+                        )
+                    ]
+                )
+            )
+        ]
+
+    def did_mount(self):
+        # Load existing key if present
+        saved_key = self.page.client_storage.get("google_api_key")
+        if saved_key:
+            self.api_key_field.value = saved_key
+        
+        # Load theme state
+        current_theme = self.page.client_storage.get("theme_mode")
+        self.theme_switch.value = (current_theme == "light")
+        
+        self.update()
+
+    def toggle_theme(self, e):
+        if self.theme_switch.value:
+            self.page.theme_mode = ft.ThemeMode.LIGHT
+            self.page.client_storage.set("theme_mode", "light")
+        else:
+            self.page.theme_mode = ft.ThemeMode.DARK
+            self.page.client_storage.set("theme_mode", "dark")
+        self.page.update()
+
+    def save_api_key(self, e):
+        if self.api_key_field.value:
+            self.page.client_storage.set("google_api_key", self.api_key_field.value)
+            self.page.snack_bar = ft.SnackBar(ft.Text("API Key saved successfully!"))
+            self.page.snack_bar.open = True
+            self.page.update()
+        else:
+            self.page.snack_bar = ft.SnackBar(ft.Text("Please enter a valid API Key."))
+            self.page.snack_bar.open = True
+            self.page.update()
+
+
+===== D:\CourseWork3\CourseWork-1sem-3year-Runner\Program\views\study_view.py =====
+import os
+import sys
+import flet as ft
+import time
+from typing import Any, Dict
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from Program.database import Database
+from Program.ai_engine import AIEngine, DEFAULT_READ_INSTRUCTION, DEFAULT_RECALL_INSTRUCTION
+
+
+class StudyView(ft.Container):
+    def __init__(self, page: ft.Page, material_id: int):
+        super().__init__()
+        self.page: ft.Page = page
+        self.material_id = material_id
+        self.db = Database()
+        self.ai = AIEngine()
+        self.expand = True
+        self.padding = 20
+
+        self.material: Dict[str, Any] | None = self._get_material(material_id)
+        self.error_view = not bool(self.material)
+
+        self.step = 1  # 1: Setup, 2: Read, 3: Recall, 4: Feedback
+        self.mode = "Standard"  # or "Mastery"
+        self.start_time = 0
+        self.analysis_result: Dict[str, Any] = {}
+
+    def _safe_update(self):
+        try:
+            self.update()
+        except AssertionError:
+            # Control not yet attached to page; ignore update in that case
+            return
+
+    def _show_error(self, message: str):
+        page = getattr(self, "page", None)
+        if page is None:
+            return
+        try:
+            page.snack_bar = ft.SnackBar(ft.Text(message))
+            page.snack_bar.open = True
+            page.update()
+        except Exception:
+            return
+
+    def _get_material(self, mid):
+        all_mats = self.db.get_materials()
+        for m in all_mats:
+            if str(m.get("id")) == str(mid):
+                m["instruction_read"] = m.get("instruction_read") or DEFAULT_READ_INSTRUCTION
+                m["instruction_recall"] = m.get("instruction_recall") or DEFAULT_RECALL_INSTRUCTION
+                return m
+        return None
+
+    def did_mount(self):
+        page = getattr(self, "page", None)
+        if not page:
+            return
+        key = page.client_storage.get("google_api_key")
+        if key:
+            self.ai.set_api_key(key)
+        self.render_step()
+
+    def set_mode(self, e):
+        self.mode = e.control.data
+        self.render_step()
+
+    def go_to_read(self, e):
+        self.step = 2
+        self.start_time = time.time()
+        self.render_step()
+
+    def go_to_recall(self, e):
+        self.step = 3
+        self.render_step()
+
+    def submit_recall(self, e):
+        if not self.material:
+            self._show_error("Material not found.")
+            return
+        # Отримуємо текст користувача (безпечно, якщо поле ще не ініціалізоване)
+        user_text = (getattr(self, "recall_input", None) or ft.TextField()).value
+        user_text = (user_text or "").strip()
+        
+        if not user_text:
+            return
+
+        # Переходимо на крок завантаження
+        self.step = 4
+        self.render_loading()
+
+        try:
+            # Викликаємо AI аналіз
+            analysis = self.ai.analyze_recall(
+                self.material["content"],
+                user_text,
+                # Передаємо інструкцію для ВІДТВОРЕННЯ (Recall)
+                recall_instruction=self.material.get("instruction_recall", DEFAULT_RECALL_INSTRUCTION),
+                # Передаємо інструкцію для ЗАПАМ'ЯТОВАННЯ (Read)"
+                memorization_instruction=self.material.get("instruction_read", DEFAULT_READ_INSTRUCTION)
+            )
+            
+            self.analysis_result = analysis or {}
+            
+            # Зберігаємо сесію в базу даних
+            self.db.save_session(
+                self.material["id"],
+                user_text,
+                self.analysis_result.get("score", 0),
+                self.analysis_result,
+                self.mode,
+            )
+            
+            # Оновлюємо екран, щоб показати результати
+            self.render_step()
+            
+        except Exception as err:
+            # Якщо сталася помилка, показуємо повідомлення і повертаємо на крок введення
+            self._show_error(f"Error analyzing: {err}")
+            self.step = 3
+            self.render_step()
+
+    def retry_mastery(self, e):
+        self.step = 2
+        self.render_step()
+
+    def text_peek(self, e):
+        self.step = 2
+        self.render_step()
+
+    def finish_session(self, e):
+        page = getattr(self, "page", None)
+        if page:
+            page.go("/library")
+
+    def go_back(self, e):
+        page = getattr(self, "page", None)
+        if page:
+            page.go("/library")
+
+    def render_loading(self):
+        self.content = ft.Container(content=ft.ProgressRing(), alignment=ft.alignment.center)
+        self._safe_update()
+
+    def set_mode_standard(self, e):
+        self.mode = "Standard"
+        self.go_to_read(e)
+
+    def set_mode_mastery(self, e):
+        self.mode = "Mastery"
+        self.go_to_read(e)
+
+    def render_step(self):
+        if self.error_view or not self.material:
+            self.content = ft.Text("Material not found.")
+            self._safe_update()
+            return
+
+        page = getattr(self, "page", None)
+        if not page:
+            return
+
+        controls = []
+
+        if self.step == 1:
+            controls = [
+                ft.Text(f"Study Session: {self.material['topic_name']}", size=24, weight=ft.FontWeight.BOLD),
+                ft.Text(f"Subject: {self.material['subject']}"),
+                ft.Divider(),
+                ft.Text("Select Mode:"),
+                ft.Row(
+                    [
+                        ft.ElevatedButton("Standard Mode", on_click=self.set_mode_standard),
+                        ft.ElevatedButton("Mastery Mode", on_click=self.set_mode_mastery),
+                    ]
+                ),
+                ft.Text("Standard: Get feedback and save.", size=12, italic=True),
+                ft.Text("Mastery: Must score > 80% to pass.", size=12, italic=True),
+            ]
+
+        elif self.step == 2:
+            bg_color = ft.Colors.GREY_200 if page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_900
+            text_color = ft.Colors.BLACK if page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.WHITE
+
+            controls = [
+                ft.Text("Read and Memorize", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    self.material.get("instruction_read", DEFAULT_READ_INSTRUCTION),
+                    italic=True,
+                    size=13,
+                    color=ft.Colors.GREY_600,
+                ),
+                ft.Divider(),
+                ft.Container(
+                    content=ft.Text(self.material["content"], size=16, color=text_color),
+                    padding=20,
+                    bgcolor=bg_color,
+                    border_radius=10,
+                    expand=True,
+                ),
+                ft.Container(height=20),
+                ft.ElevatedButton("I'm Ready (Hide Text)", icon=ft.Icons.VISIBILITY_OFF, on_click=self.go_to_recall),
+            ]
+
+        elif self.step == 3:
+            self.recall_input = ft.TextField(
+                label="Reconstruct the text here...",
+                multiline=True,
+                min_lines=10,
+                expand=True,
+                autofocus=True,
+            )
+            controls = [
+                ft.Text("Active Recall", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    self.material.get("instruction_recall", DEFAULT_RECALL_INSTRUCTION),
+                    italic=True,
+                    size=13,
+                    color=ft.Colors.GREY_600,
+                ),
+                ft.Container(height=10),
+                self.recall_input,
+                ft.Container(height=10),
+                ft.ElevatedButton("Submit Analysis", icon=ft.Icons.CHECK, on_click=self.submit_recall),
+            ]
+
+        elif self.step == 4:
+            score = self.analysis_result.get("score", 0)
+            summary = self.analysis_result.get("summary_feedback", "No feedback provided.")
+            missing = self.analysis_result.get("missing_key_facts", [])
+            raw = self.analysis_result.get("_raw")
+
+            score_color = ft.Colors.GREEN if score >= 80 else ft.Colors.ORANGE
+            if score < 50:
+                score_color = ft.Colors.RED
+
+            feedback_content = [
+                ft.Row(
+                    [
+                        ft.Text(f"Score: {score}/100", size=30, weight=ft.FontWeight.BOLD, color=score_color),
+                        ft.Icon(ft.Icons.THUMB_UP if score >= 80 else ft.Icons.THUMB_DOWN),
+                    ]
+                ),
+                ft.Text(summary, size=16),
+                ft.Divider(),
+                ft.Text("Missing Key Facts:", weight=ft.FontWeight.BOLD),
+            ]
+
+            for fact in missing:
+                feedback_content.append(ft.Text(f"• {fact}"))
+
+            if raw:
+                feedback_content.append(ft.Divider())
+                feedback_content.append(ft.Text("Raw AI output (debug):", weight=ft.FontWeight.BOLD, size=12))
+                feedback_content.append(ft.Text(raw, size=12, selectable=True))
+
+            actions = [ft.ElevatedButton("Finish", on_click=self.finish_session)]
+
+            if self.mode == "Mastery" and score < 80:
+                actions = [
+                    ft.ElevatedButton("Retry (Peek Text)", on_click=self.text_peek),
+                    ft.TextButton("Give Up / Finish", on_click=self.finish_session),
+                ]
+
+            controls = feedback_content + [ft.Container(height=20), ft.Row(actions)]
+
+        header = ft.Row([
+            ft.IconButton(icon=ft.Icons.ARROW_BACK, tooltip="Back", on_click=self.go_back),
+            ft.Text("Back to Library", weight=ft.FontWeight.BOLD),
+        ])
+
+        self.content = ft.Column([header] + controls, scroll=ft.ScrollMode.AUTO, expand=True)
+        self._safe_update()
+
+
+
+

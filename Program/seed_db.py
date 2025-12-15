@@ -1,5 +1,5 @@
 import sys
-from database import Database
+from Program.database import Database
 
 SAMPLES = [
     {

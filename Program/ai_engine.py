@@ -107,7 +107,7 @@ class AIEngine:
             f"Generate a concise but comprehensive educational text about '{topic}' within the subject of '{subject}'. "
             "The text should be approximately 300 words, suitable for a student to read and then attempt to recall. "
             "Focus on key facts and core concepts. Give output in the same language as the topic. Provide plain text without markdown. \n\n"
-        )
+        ) # формування промпту
 
         try:
             if self._sdk_model:
@@ -182,11 +182,7 @@ class AIEngine:
             try:
                 return json.loads(text)
             except json.JSONDecodeError:
-                
-                # --- ДОДАЙ ЦЕ ---
-                print("!!!!!!!!!! CRITICAL AI ERROR !!!!!!!!!!!")
-                print(f"FULL RAW TEXT: {text}")
-                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                pass
             # ----------------
                 raw_snippet = text[:4000]
                 # Fallback: extract the first JSON-looking block

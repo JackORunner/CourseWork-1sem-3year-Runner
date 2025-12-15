@@ -7,7 +7,7 @@ sys.path.append(os.getcwd())
 def test_imports():
     print("Testing Imports...")
     try:
-        from main import main
+        from Program.main import main
         from views.library_view import LibraryView
         from views.study_view import StudyView
         from views.settings_view import SettingsView
