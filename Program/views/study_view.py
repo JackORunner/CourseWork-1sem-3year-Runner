@@ -2,6 +2,7 @@ import os
 import sys
 import flet as ft
 import time
+from typing import Any, Dict
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 if BASE_DIR not in sys.path:
@@ -14,20 +15,20 @@ from ai_engine import AIEngine, DEFAULT_READ_INSTRUCTION, DEFAULT_RECALL_INSTRUC
 class StudyView(ft.Container):
     def __init__(self, page: ft.Page, material_id: int):
         super().__init__()
-        self.page = page
+        self.page: ft.Page = page
         self.material_id = material_id
         self.db = Database()
         self.ai = AIEngine()
         self.expand = True
         self.padding = 20
 
-        self.material = self._get_material(material_id)
+        self.material: Dict[str, Any] | None = self._get_material(material_id)
         self.error_view = not bool(self.material)
 
         self.step = 1  # 1: Setup, 2: Read, 3: Recall, 4: Feedback
         self.mode = "Standard"  # or "Mastery"
         self.start_time = 0
-        self.analysis_result = {}
+        self.analysis_result: Dict[str, Any] = {}
 
     def _safe_update(self):
         try:
@@ -57,7 +58,10 @@ class StudyView(ft.Container):
         return None
 
     def did_mount(self):
-        key = self.page.client_storage.get("google_api_key")
+        page = getattr(self, "page", None)
+        if not page:
+            return
+        key = page.client_storage.get("google_api_key")
         if key:
             self.ai.set_api_key(key)
         self.render_step()
@@ -76,6 +80,9 @@ class StudyView(ft.Container):
         self.render_step()
 
     def submit_recall(self, e):
+        if not self.material:
+            self._show_error("Material not found.")
+            return
         # Отримуємо текст користувача (безпечно, якщо поле ще не ініціалізоване)
         user_text = (getattr(self, "recall_input", None) or ft.TextField()).value
         user_text = (user_text or "").strip()
@@ -127,10 +134,14 @@ class StudyView(ft.Container):
         self.render_step()
 
     def finish_session(self, e):
-        self.page.go("/library")
+        page = getattr(self, "page", None)
+        if page:
+            page.go("/library")
 
     def go_back(self, e):
-        self.page.go("/library")
+        page = getattr(self, "page", None)
+        if page:
+            page.go("/library")
 
     def render_loading(self):
         self.content = ft.Container(content=ft.ProgressRing(), alignment=ft.alignment.center)
@@ -145,16 +156,20 @@ class StudyView(ft.Container):
         self.go_to_read(e)
 
     def render_step(self):
-        if self.error_view:
+        if self.error_view or not self.material:
             self.content = ft.Text("Material not found.")
-            self.update()
+            self._safe_update()
+            return
+
+        page = getattr(self, "page", None)
+        if not page:
             return
 
         controls = []
 
         if self.step == 1:
             controls = [
-                ft.Text(f"Study Session: {self.material['topic_name']}", size=24, weight="bold"),
+                ft.Text(f"Study Session: {self.material['topic_name']}", size=24, weight=ft.FontWeight.BOLD),
                 ft.Text(f"Subject: {self.material['subject']}"),
                 ft.Divider(),
                 ft.Text("Select Mode:"),
@@ -169,11 +184,11 @@ class StudyView(ft.Container):
             ]
 
         elif self.step == 2:
-            bg_color = ft.Colors.GREY_200 if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_900
-            text_color = ft.Colors.BLACK if self.page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.WHITE
+            bg_color = ft.Colors.GREY_200 if page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.GREY_900
+            text_color = ft.Colors.BLACK if page.theme_mode == ft.ThemeMode.LIGHT else ft.Colors.WHITE
 
             controls = [
-                ft.Text("Read and Memorize", size=20, weight="bold"),
+                ft.Text("Read and Memorize", size=20, weight=ft.FontWeight.BOLD),
                 ft.Text(
                     self.material.get("instruction_read", DEFAULT_READ_INSTRUCTION),
                     italic=True,
@@ -201,7 +216,7 @@ class StudyView(ft.Container):
                 autofocus=True,
             )
             controls = [
-                ft.Text("Active Recall", size=20, weight="bold"),
+                ft.Text("Active Recall", size=20, weight=ft.FontWeight.BOLD),
                 ft.Text(
                     self.material.get("instruction_recall", DEFAULT_RECALL_INSTRUCTION),
                     italic=True,
@@ -227,13 +242,13 @@ class StudyView(ft.Container):
             feedback_content = [
                 ft.Row(
                     [
-                        ft.Text(f"Score: {score}/100", size=30, weight="bold", color=score_color),
+                        ft.Text(f"Score: {score}/100", size=30, weight=ft.FontWeight.BOLD, color=score_color),
                         ft.Icon(ft.Icons.THUMB_UP if score >= 80 else ft.Icons.THUMB_DOWN),
                     ]
                 ),
                 ft.Text(summary, size=16),
                 ft.Divider(),
-                ft.Text("Missing Key Facts:", weight="bold"),
+                ft.Text("Missing Key Facts:", weight=ft.FontWeight.BOLD),
             ]
 
             for fact in missing:
@@ -241,7 +256,7 @@ class StudyView(ft.Container):
 
             if raw:
                 feedback_content.append(ft.Divider())
-                feedback_content.append(ft.Text("Raw AI output (debug):", weight="bold", size=12))
+                feedback_content.append(ft.Text("Raw AI output (debug):", weight=ft.FontWeight.BOLD, size=12))
                 feedback_content.append(ft.Text(raw, size=12, selectable=True))
 
             actions = [ft.ElevatedButton("Finish", on_click=self.finish_session)]
@@ -256,7 +271,7 @@ class StudyView(ft.Container):
 
         header = ft.Row([
             ft.IconButton(icon=ft.Icons.ARROW_BACK, tooltip="Back", on_click=self.go_back),
-            ft.Text("Back to Library", weight="bold"),
+            ft.Text("Back to Library", weight=ft.FontWeight.BOLD),
         ])
 
         self.content = ft.Column([header] + controls, scroll=ft.ScrollMode.AUTO, expand=True)

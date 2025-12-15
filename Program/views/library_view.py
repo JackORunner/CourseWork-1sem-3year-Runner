@@ -81,7 +81,7 @@ class LibraryView(ft.Container):
         self.subject_filter.options = options
         self.update()
 
-    def load_materials(self, subject=None, search_query=""):
+    def load_materials(self, subject: str | None = None, search_query: str | None = "") -> None:
         self.materials_list.controls.clear()
         
         # Get all materials first (or filter by subject if DB supports it efficiently)
@@ -182,9 +182,11 @@ class LibraryView(ft.Container):
         self.update()
 
     def filter_materials(self, e):
+        subject_val = self.subject_filter.value or "All"
+        search_val = self.search_field.value or ""
         self.load_materials(
-            subject=self.subject_filter.value,
-            search_query=self.search_field.value
+            subject=subject_val,
+            search_query=search_val,
         )
 
     def start_study(self, material):
@@ -305,7 +307,7 @@ class AddMaterialDialog(ft.AlertDialog):
         )
 
         # Pre-fill for edit mode
-        if self.is_edit:
+        if self.is_edit and self.material:
             self.subject_field.value = self.material.get("subject", "")
             self.topic_field.value = self.material.get("topic_name", "")
             self.content_field.value = self.material.get("content", "")

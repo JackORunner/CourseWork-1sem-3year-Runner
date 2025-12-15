@@ -97,7 +97,8 @@ class Database:
             """,
             (subject, topic_name, content, instruction_read, instruction_recall)
         )
-        material_id = cursor.lastrowid
+        # sqlite3 may return None for lastrowid on edge cases; coerce to int
+        material_id = int(cursor.lastrowid or 0)
         conn.commit()
         conn.close()
         return material_id
