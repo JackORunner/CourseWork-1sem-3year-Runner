@@ -218,6 +218,7 @@ class StudyView(ft.Container):
             score = self.analysis_result.get("score", 0)
             summary = self.analysis_result.get("summary_feedback", "No feedback provided.")
             missing = self.analysis_result.get("missing_key_facts", [])
+            raw = self.analysis_result.get("_raw")
 
             score_color = ft.Colors.GREEN if score >= 80 else ft.Colors.ORANGE
             if score < 50:
@@ -237,6 +238,11 @@ class StudyView(ft.Container):
 
             for fact in missing:
                 feedback_content.append(ft.Text(f"• {fact}"))
+
+            if raw:
+                feedback_content.append(ft.Divider())
+                feedback_content.append(ft.Text("Raw AI output (debug):", weight="bold", size=12))
+                feedback_content.append(ft.Text(raw, size=12, selectable=True))
 
             actions = [ft.ElevatedButton("Finish", on_click=self.finish_session)]
 

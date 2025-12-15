@@ -1,6 +1,7 @@
 import os
 import json
 from typing import Dict, Any, Optional
+import re
 
 # Defaults for instructions
 DEFAULT_READ_INSTRUCTION = (
@@ -65,7 +66,7 @@ class AIEngine:
                 self._sdk_model = None
 
     # REST implementation
-    def _rest_call(self, prompt: str, max_tokens: int = 512, temperature: float = 0.2) -> str:
+    def _rest_call(self, prompt: str, max_tokens: int = 2500, temperature: float = 0.2) -> str:
         if not self.api_key:
             raise ValueError("API Key is missing. Set GOOGLE_API_KEY or pass api_key to AIEngine.")
         # Gemini REST uses generateContent on v1beta; fall back to v1 for legacy models if needed.
@@ -93,7 +94,8 @@ class AIEngine:
             parts = candidates[0].get("content", {}).get("parts") or []
             if parts and isinstance(parts[0], dict):
                 return parts[0].get("text", "") or parts[0].get("content", "") or ""
-        return data.get("output", "") or data.get("text", "")
+        # Fall back to an error message to make failures explicit
+        return json.dumps({"error": "empty_response", "data": data})
 
     def _sdk_call(self, prompt: str):
         if not self._sdk_model:
@@ -169,25 +171,67 @@ class AIEngine:
             if self._sdk_model:
                 text = self._sdk_call(prompt)
             else:
-                text = self._rest_call(prompt, max_tokens=1024)
+                text = self._rest_call(prompt, max_tokens=2500)
 
             if text.startswith("```json"):
                 text = text[7:-3].strip()
             elif text.startswith("```"):
                 text = text[3:-3].strip()
 
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {
-                "score": 0,
-                "missing_key_facts": ["Error parsing AI response"],
-                "misinterpretations": [],
-                "summary_feedback": "The AI response could not be processed."
-            }
+            # Try direct JSON first
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                
+                # --- ДОДАЙ ЦЕ ---
+                print("!!!!!!!!!! CRITICAL AI ERROR !!!!!!!!!!!")
+                print(f"FULL RAW TEXT: {text}")
+                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            # ----------------
+                raw_snippet = text[:4000]
+                # Fallback: extract the first JSON-looking block
+                start = raw_snippet.find("{")
+                end = raw_snippet.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    candidate = raw_snippet[start : end + 1]
+                    try:
+                        return json.loads(candidate)
+                    except Exception:
+                        pass
+                # Heuristic parse: pull score and missing_key_facts if present
+                score_match = re.search(r'"score"\s*[:=]\s*(\d+)', raw_snippet, re.IGNORECASE)
+                score_val = int(score_match.group(1)) if score_match else 0
+                facts: list[str] = []
+                facts_block = re.search(r'"missing_key_facts"\s*[:=]\s*\[(.*?)\]', raw_snippet, re.IGNORECASE | re.DOTALL)
+                if facts_block:
+                    for piece in re.findall(r'"(.*?)"', facts_block.group(1)):
+                        cleaned = piece.strip()
+                        if cleaned:
+                            facts.append(cleaned)
+                if facts:
+                    print("[AIEngine] Heuristic parse used. Raw snippet:", raw_snippet)
+                    return {
+                        "score": score_val,
+                        "missing_key_facts": facts,
+                        "misinterpretations": [],
+                        "summary_feedback": "Parsed with fallback; check raw output.",
+                        "_raw": raw_snippet,
+                    }
+
+                # Final fallback: show full raw text so the user sees the exact error/response
+                print("[AIEngine] JSON parse fallback. Raw response snippet:", raw_snippet)
+                return {
+                    "score": 0.12,
+                    "missing_key_facts": [f"Error parsing AI response{raw_snippet}"],
+                    "misinterpretations": [],
+                    "summary_feedback": raw_snippet,
+                    "_raw": raw_snippet,
+                }
         except Exception as e:
             return {
                 "score": 0,
                 "missing_key_facts": [f"System Error: {e}"],
                 "misinterpretations": [],
-                "summary_feedback": "An error occurred during analysis."
+                "summary_feedback": f"System error: {e}",
+                "_raw": str(e),
             }
